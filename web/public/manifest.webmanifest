@@ -1,0 +1,25 @@
+{
+  "name": "Viral Network",
+  "short_name": "Viral",
+  "description": "Hệ điều hành vận hành nội bộ Acme — dự án, báo giá, hồ sơ, kiểm soát chi phí.",
+  "start_url": "/viral/index.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#05080e",
+  "theme_color": "#101413",
+  "lang": "vi",
+  "dir": "ltr",
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "/viral/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
