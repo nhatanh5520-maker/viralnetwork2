@@ -20,8 +20,8 @@ export function createRuntime(input={},user=null,env={}) {
   setValue(value){return this.setValues(Array.from({length:this.nr},()=>Array(this.nc).fill(value)));}
   clearContent(){for(let r=0;r<this.nr;r++)for(let c=0;c<this.nc;c++)if(this.sheet.cells[this.row-1+r])this.sheet.cells[this.row-1+r][this.col-1+c]='';return this;}
   clearContents(){return this.clearContent();}getRow(){return this.row;}getColumn(){return this.col;}getNumRows(){return this.nr;}getNumColumns(){return this.nc;}getSheet(){return this.sheet;}
-  getA1Notation(){return `${this.row}:${this.col}`;}getFormula(){return '';}getFormulas(){return this.getValues().map(r=>r.map(()=>''));}setFormula(){return this;}
-  getDataValidation(){return null;}getRichTextValues(){return this.getValues().map(r=>r.map(v=>({getText:()=>String(v),getLinkUrl:()=>null,getRuns:()=>[]})));}
+  getA1Notation(){return `${this.row}:${this.col}`;}getFormula(){return this.getFormulas()[0][0];}getFormulas(){const meta=env.GRID_META?.[this.sheet.book]?.[this.sheet.name];return this.getValues().map((r,i)=>r.map((v,j)=>meta?.formulas?.[this.row-1+i]?.[this.col-1+j]||''));}setFormula(){return this;}
+  getDataValidation(){return null;}getRichTextValues(){const meta=env.GRID_META?.[this.sheet.book]?.[this.sheet.name];return this.getValues().map((r,i)=>r.map((v,j)=>{const links=meta?.links?.[this.row-1+i]?.[this.col-1+j]||[];return {getText:()=>String(v),getLinkUrl:()=>links[0]||null,getRuns:()=>links.map(url=>({getLinkUrl:()=>url}))};}));}
   createFilter(){this.sheet.filter=chain();return this.sheet.filter;}
  }
  for(const key of ['setDataValidation','clearDataValidations','clearNote','setNote','setNumberFormat','setFontWeight','setBackground'])Range.prototype[key]=function(){return this;};
@@ -43,7 +43,7 @@ export function createRuntime(input={},user=null,env={}) {
   constructor(id){this.id=id;data.books[id]??={};}getId(){return this.id;}getUrl(){return env.WEB_APP_URL||'';}
   getSheetByName(name){return Object.hasOwn(data.books[this.id],name)?new Sheet(name,this.id):null;}
   insertSheet(name){data.books[this.id][name]??=[];return new Sheet(name,this.id);}getSheets(){return Object.keys(data.books[this.id]).map(n=>new Sheet(n,this.id));}
-  getSpreadsheetTimeZone(){return 'Asia/Ho_Chi_Minh';}getSpreadsheetLocale(){return 'vi_VN';}toast(){}
+  getSpreadsheetTimeZone(){return env.GRID_TIMEZONE?.[this.id]||'Asia/Ho_Chi_Minh';}getSpreadsheetLocale(){return 'vi_VN';}toast(){}
  }
  const dateFormat=(value,zone,format)=>{
   const d=new Date(value);if(!Number.isFinite(d.getTime()))throw Error('Ngày không hợp lệ');
@@ -74,6 +74,8 @@ export function createRuntime(input={},user=null,env={}) {
   if(__user){const p=rows_('Employees').find(p=>String(p.telegram_id)===String(__user.employeeId)&&String(p.active).toLowerCase()==='true');if(!p)throw Error('Tài khoản chưa được kích hoạt');return {id:String(p.telegram_id),name:String(p.name),role:role_(p.role),department:String(p.department||'')};}
   if(typeof initData!=='string'||initData.startsWith('v'))throw Error('Cần đăng nhập');return originalTelegramAuth(initData);
  };
+ const webFieldBuildPoint=fieldBuildPoint_;
+ fieldBuildPoint_=function(u,input,date,now){const point=webFieldBuildPoint(u,input,date,now);if(point.mode==='office')point.place=String(setting_('office_name')||'Văn phòng');return point;};
  dispatchNotifications=function(){return {ok:true,queued:true};};
  tgSend_=function(chatId,text){return __enqueue(chatId,text);};
  rememberDevice=function(initData){auth_(initData);return {ok:true};};

@@ -1,0 +1,5 @@
+import {NextResponse} from 'next/server';import {sameOrigin} from '@/lib/viral';import {createClient} from '@/lib/supabase/server';
+export async function POST(req:Request){try{sameOrigin(req);const {token_hash,password}=await req.json();if(typeof password!=='string'||password.length<12||password.length>128||typeof token_hash!=='string'||!/^[a-f0-9]{32,128}$/i.test(token_hash))throw Error('Link không hợp lệ hoặc mật khẩu chưa đủ 12 ký tự.');
+ const sb=await createClient(),{error}=await sb.auth.verifyOtp({token_hash,type:'recovery'});if(error)throw Error('Link hết hạn hoặc đã sử dụng. Liên hệ HR để nhận link mới.');
+ const {error:e}=await sb.auth.updateUser({password});if(e)throw Error('Không đặt được mật khẩu theo chính sách Supabase. Cần nhận link mới để thử lại.');return NextResponse.json({ok:true},{headers:{'Cache-Control':'no-store'}});
+ }catch(e){return NextResponse.json({error:e instanceof Error?e.message:'Không đặt được mật khẩu.'},{status:400,headers:{'Cache-Control':'no-store'}});}}

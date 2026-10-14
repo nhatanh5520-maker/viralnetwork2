@@ -109,3 +109,26 @@ Thiết lập group_chat_id, HR/kế toán, tọa độ văn phòng, lịch làm
 ## Kiểm chứng đã thực hiện
 
 Xem VALIDATION.md. Build/kiểm thử cục bộ không thay cho kiểm thử tích hợp Supabase/Telegram với tài khoản và dữ liệu thật.
+
+## Cập nhật 14/10/2026 — Admin, GPS, Thu/Chi Sheets
+
+Đọc `HUONG_DAN_ADMIN.md` để cập nhật bản đã deploy. Thêm `/admin` bảo vệ bằng
+`VIRAL_ADMIN_EMAILS` và tài khoản Director đang hoạt động. Có bảng sản xuất, sửa Idea/
+phân công qua nghiệp vụ gốc, thùng rác, CSV, sao lưu JSON, lịch sử và CAS.
+Cấu hình một vị trí GPS văn phòng và ca/nghỉ trưa. Thu/Chi kết nối Google Sheets riêng tư
+qua service account read-only; env `GOOGLE_SERVICE_ACCOUNT_EMAIL`,
+`GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`. URL/ID và tên tab được cấu hình tại admin.
+Báo cáo financeReport trong app web dùng cùng kết nối, chỉ Director được xem.
+Không tự triển khai lên GitHub/Vercel, không nhập sổ kế toán vào Supabase.
+
+## Chuyển dữ liệu và HR cấp tài khoản
+
+Đọc `HUONG_DAN_CHUYEN_DOI.md`. Source có `/admin` → Chuyển dữ liệu cũ,
+nhập thử riêng, sao chép ảnh Drive có checksum, ghép Auth với nhân viên cũ,
+cutover giao dịch có backup và rollback. Chạy thêm `supabase/viral-migration.sql`
+và `supabase/viral-hr-accounts.sql` trên project hiện tại.
+HR được chỉ định có mục Tiện ích → Tạo tài khoản nhân viên, email + Telegram ID,
+gửi link đặt mật khẩu một lần và gửi lại link qua Telegram. Không gửi mật khẩu
+trong tin nhắn, không cho HR tự cấp quyền Director/Leader.
+Giữ `VIRAL_MAINTENANCE=false` khi chỉ chuẩn bị. Không nhập dữ liệu cũ đang thay đổi;
+đợi bản Excel cuối theo yêu cầu của chủ hệ thống.

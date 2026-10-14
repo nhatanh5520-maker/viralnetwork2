@@ -1,6 +1,7 @@
 import 'server-only';
 import {createClient as createSupabaseClient} from '@supabase/supabase-js';
 import {createClient} from '@/lib/supabase/server';
+import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
 export function viralService(){
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -11,7 +12,7 @@ export async function webMember(){
  const auth=await createClient();const {data:{user},error}=await auth.auth.getUser();
  if(error||!user)return null;
  const svc=viralService();const {data,error:err}=await svc.from('viral_members').select('employee_id').eq('auth_user_id',user.id).eq('active',true).maybeSingle();
- if(err)throw err;if(!data)return null;return {employeeId:data.employee_id};
+ if(err)throw err;if(!data)return null;return {employeeId:data.employee_id,email:user.email||'',authUserId:user.id};
 }
 export async function loadViral(){
  const svc=viralService();const {data,error}=await svc.from('viral_state').select('data,version').eq('id','main').single();if(error)throw Error('Chưa khởi tạo dữ liệu Viral Network. Chạy scripts/viral-init.mjs trước.');
@@ -21,17 +22,27 @@ export async function loadViral(){
  return {svc,data:data.data,version:data.version};
 }
 export function sameOrigin(req:Request){const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)throw Error('Nguồn yêu cầu không hợp lệ.');}
-const makeEvents=(data:any)=>{
+export const makeEvents=(data:any)=>{
  const events=(data.outbox||[]).filter((x:any)=>x.status==='pending').map((x:any)=>({id:x.id,chat_id:x.chatId,text:x.text,photo_file_id:null}));
  const cells=data.books.main.Notifications||[],h=cells[0]||[];
  for(const row of cells.slice(1)){const n=Object.fromEntries(h.map((key:string,i:number)=>[key,row[i]]));if(['pending','failed'].includes(n.status)&&n.telegram_id)events.push({id:'notification:'+n.id,chat_id:String(n.telegram_id),text:String(n.message),photo_file_id:n.photo_file_id||null});}
  return events;
 };
 export async function invokeViral(method:string,args:any[],initData:string,user:any){
+ if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web đang tạm dừng để chuyển dữ liệu. Mini App cũ vẫn dùng bình thường.');
  const {svc,data,version}=await loadViral();
  let rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
  rt.context.__authInput=initData;
  const vm=await import('node:vm');const actor=vm.runInContext('auth_(__authInput)',rt.context,{timeout:5000});
+ if(method==='financeReport'){
+  if(actor.role!=='director')throw Error('Chỉ Ban giám đốc được xem Thu chi');
+  const {config,book}=await readFinanceBook(data);
+  const temp=structuredClone(data),id='external_finance_read_only_book';
+  temp.books[id]={[config.sheetName]:book.cells};temp.properties.FINANCE_SHEET_ID=id;temp.properties.FINANCE_SHEET_NAME=config.sheetName;
+  const financeRuntime=createRuntime(temp,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,GRID_META:{[id]:{[config.sheetName]:book}},GRID_TIMEZONE:{[id]:book.timeZone}});
+  // Google sheet data is request-local. Never persist the copied ledger in Supabase.
+  return financeRuntime.run(method,[initData,...args]);
+ }
  // Resolve permission BEFORE downloading files.
  let fileIds:string[]=[];
  if(['getV20ExpenseBill','getV20ExpenseBillImage'].includes(method)){
