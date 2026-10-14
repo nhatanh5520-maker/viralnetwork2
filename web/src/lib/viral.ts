@@ -33,7 +33,11 @@ export async function invokeViral(method:string,args:any[],initData:string,user:
  const {svc,data,version}=await loadViral();
  let rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
  rt.context.__authInput=initData;
- const vm=await import('node:vm');const actor=vm.runInContext('auth_(__authInput)',rt.context,{timeout:5000});
+ const vm=await import('node:vm');
+ if(['personnelDirectory','personnelDetail','savePersonnel','personnelHistory','restorePersonnel'].includes(method)){
+  vm.runInContext(`const previousHRPermission=hrRequireManager_;hrRequireManager_=function(u){if(String(u.id)===String(setting_('hr_telegram_id')||''))return;return previousHRPermission(u);};const previousHRValidation=hrValidation_;hrValidation_=function(data,before,all,u){if(!isDirector_(u)&&String(u.id)===String(setting_('hr_telegram_id')||'')&&before&&role_(before.role)!=='employee')throw Error('HR chỉ sửa hồ sơ nhân viên; hồ sơ quản lý cần Ban giám đốc.');return previousHRValidation(data,before,all,u);};`,rt.context,{timeout:5000});
+ }
+ const actor=vm.runInContext('auth_(__authInput)',rt.context,{timeout:5000});
  if(method==='financeReport'){
   if(actor.role!=='director')throw Error('Chỉ Ban giám đốc được xem Thu chi');
   const {config,book}=await readFinanceBook(data);

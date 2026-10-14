@@ -21,3 +21,22 @@ begin
 end $$;
 revoke all on function public.viral_hr_resend_link(uuid,text,text) from public,anon,authenticated;
 grant execute on function public.viral_hr_resend_link(uuid,text,text) to service_role;
+
+-- Login administration audit excludes passwords and recovery links.
+create table if not exists public.viral_account_audit(id uuid primary key default gen_random_uuid(),actor_telegram_id text not null,target_telegram_id text not null,auth_user_id uuid,email_before text,email_after text,operation text not null,status text not null default 'pending',created_at timestamptz not null default now());
+alter table public.viral_account_audit enable row level security;
+revoke all on public.viral_account_audit from public,anon,authenticated;
+grant select,insert,update on public.viral_account_audit to service_role;
+
+-- Employee-facing Auth API cannot change login email without a short-lived
+-- authorization recorded by the private HR/Director server endpoint.
+create or replace function public.viral_guard_login_email() returns trigger language plpgsql security definer set search_path=public as $$
+begin
+ if new.email is distinct from old.email and not exists(
+  select 1 from viral_account_audit where auth_user_id=old.id and lower(email_after)=lower(new.email) and status='pending' and created_at>now()-interval '5 minutes'
+ ) then raise exception 'Login email changes require HR or Director' using errcode='42501';end if;
+ return new;
+end $$;
+drop trigger if exists viral_login_email_guard on auth.users;
+create trigger viral_login_email_guard before update of email on auth.users for each row execute function public.viral_guard_login_email();
+revoke all on function public.viral_guard_login_email() from public,anon,authenticated;

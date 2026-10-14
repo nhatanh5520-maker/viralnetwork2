@@ -1,5 +1,5 @@
 import {NextResponse} from 'next/server';import crypto from 'node:crypto';
-import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor,employeeAccountData} from '../../../../../../server/viral/hr-accounts.mjs';
+import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor,employeeAccountData,manualAccountInput} from '../../../../../../server/viral/hr-accounts.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 const reply=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'no-store'}});
 async function sendQueuedWelcome(svc:any,eventId:string,telegramId:string,welcome:string,token:string){
@@ -12,6 +12,38 @@ export async function POST(req:Request){let createdId:string|null=null,svc:any=n
  if(!user&&!initData)return reply({error:'Cần đăng nhập.'},401);
  const state=await loadViral();svc=state.svc;const actor=hrAccountActor(state.data,user,initData,process.env.TELEGRAM_BOT_TOKEN);
  if(body.action==='access')return reply({ok:true});
+ if(body.action==='employee-status'){
+  const id=String(body.values?.telegram_id||''),active=body.values?.active===true,cells=state.data.books.main.Employees,h=cells[0],row=cells.slice(1).find((r:any)=>String(r[0])===id);
+  if(!row)throw Error('Không thấy nhân viên.');if(actor.role!=='director'&&String(row[h.indexOf('role')])!=='employee')throw Error('HR chỉ ngưng/khôi phục nhân viên; quản lý cần Giám đốc.');if(id===actor.id)throw Error('Không thể tự ngưng tài khoản của mình.');if(row[h.indexOf('role')]==='director'&&!active&&!cells.slice(1).some((r:any)=>String(r[0])!==id&&r[h.indexOf('role')]==='director'&&String(r[h.indexOf('active')]).toLowerCase()==='true'))throw Error('Phải giữ Giám đốc đang hoạt động.');
+  const next=structuredClone(state.data),r=next.books.main.Employees.find((r:any)=>String(r[0])===id);r[h.indexOf('active')]=active;next.adminAudit??=[];next.adminAudit.push({id:crypto.randomUUID(),at:new Date().toISOString(),actor:actor.id,name:actor.name,action:active?'staff-restore':'staff-deactivate',target:id,reason:'HR quản lý nhân sự',changes:{Employees:{before:[row],after:[r]}}});const {data:saved,error}=await svc.rpc('viral_commit',{expected_version:state.version,new_data:next,events:[]});if(error||!saved)throw Error('Dữ liệu thay đổi. Làm mới và thử lại.');const {error:membershipError}=await svc.from('viral_members').update({active}).eq('employee_id',id);if(membershipError)throw Error('Trạng thái hồ sơ đã lưu; cần kiểm tra trạng thái đăng nhập Supabase.');return reply({ok:true,message:active?'Đã khôi phục nhân viên.':'Đã ngưng nhân viên, khóa quyền vào app; giữ nguyên lịch sử.'});
+ }
+ if(body.action==='profile-access'){
+  const id=String(body.values?.telegram_id||''),cells=state.data.books.main.Employees,h=cells[0],employee=cells.slice(1).find((r:any)=>String(r[0])===id);
+  if(!employee)throw Error('Không thấy nhân viên.');if(actor.role!=='director'&&String(employee[h.indexOf('role')])!=='employee')throw Error('HR chỉ cấp đăng nhập cho nhân viên.');
+  const {data:member,error:me}=await svc.from('viral_members').select('auth_user_id,active').eq('employee_id',id).maybeSingle();if(me)throw Error('Không kiểm tra được tài khoản.');if(!member)return reply({ok:true,email:'',hasAccount:false});
+  const {data:found,error:fe}=await svc.auth.admin.getUserById(member.auth_user_id);if(fe)throw Error('Không đọc được email đăng nhập.');return reply({ok:true,email:found.user?.email||'',hasAccount:true});
+ }
+ if(body.action==='profile-account'){
+  const target=manualAccountInput(state.data,actor,body.values||{}),{data:member,error:me}=await svc.from('viral_members').select('auth_user_id,active').eq('employee_id',target.telegramId).maybeSingle();if(me)throw Error('Không kiểm tra được đăng nhập hiện có.');
+  let authId:string,previousEmail='',auditId:string,loginSaved=false;
+  if(member){if(!member.active)throw Error('Quyền đăng nhập đang bị khóa. Cần quản trị kiểm tra.');const {data:found,error:fe}=await svc.auth.admin.getUserById(member.auth_user_id);if(fe||!found.user)throw Error('Không đọc được tài khoản hiện có.');authId=member.auth_user_id;previousEmail=found.user.email||'';}
+  else authId='';
+  const {data:audit,error:ad}=await svc.from('viral_account_audit').insert({actor_telegram_id:actor.id,target_telegram_id:target.telegramId,auth_user_id:authId||null,email_before:previousEmail,email_after:target.email,operation:member?'update-login':'create-login'}).select('id').single();if(ad)throw Error('Chạy lại supabase/viral-hr-accounts.sql của bản ZIP mới trước khi cấp đăng nhập.');auditId=audit.id;
+  try{
+   if(member){const {error:ue}=await svc.auth.admin.updateUserById(authId,{email:target.email,password:target.password,email_confirm:true});if(ue)throw Error('Không cập nhật được đăng nhập. Email có thể đã thuộc tài khoản khác hoặc mật khẩu không đạt chính sách.');loginSaved=true;}
+   else {
+    const prepared=employeeAccountData(state.data,actor,{email:target.email,telegram_id:target.telegramId,name:target.employee.name,department:target.employee.department,job_title:target.employee.job_title||'Nhân viên',employee_code:target.employee.employee_code});
+    const {data:auth,error:ae}=await svc.auth.admin.createUser({email:target.email,password:target.password,email_confirm:true});if(ae||!auth.user)throw Error('Không tạo được đăng nhập. Email có thể đã được sử dụng hoặc mật khẩu không đạt chính sách.');authId=String(auth.user.id);createdId=authId;
+    const base=process.env.VIRAL_WEB_URL||new URL(req.url).origin,welcome='👋 '+target.employee.name+' đã được HR cấp đăng nhập Viral Network.\nEmail: '+target.email+'\nMở web: '+base+'\nMật khẩu được HR bàn giao riêng. Thông báo công việc vẫn gửi vào Telegram này.';
+    const {data:saved,error:ce}=await svc.rpc('viral_hr_create_account',{expected_version:state.version,new_data:prepared.data,auth_user:authId,employee:target.telegramId,welcome});if(ce||!saved)throw Error('Dữ liệu vừa thay đổi hoặc chưa cài hàm HR. Kiểm tra SQL và thử lại.');committed=true;loginSaved=true;
+   }
+   const {error:logError}=await svc.from('viral_account_audit').update({status:'done',auth_user_id:authId}).eq('id',auditId);
+   let eventId=member?'':'account-welcome:'+authId;
+   if(member){const {data:event,error:qe}=await svc.rpc('viral_hr_resend_link',{account_id:authId,telegram_id:target.telegramId,welcome:'🔐 HR đã cập nhật email/mật khẩu đăng nhập Viral Network.\nEmail: '+target.email+'\nMật khẩu được HR bàn giao riêng; không gửi trong tin Telegram.'});if(!qe)eventId=event;}
+   const token=process.env.TELEGRAM_BOT_TOKEN;let sent=false;if(token&&eventId){const {data:event}=await svc.from('viral_outbox').select('body').eq('id',eventId).single();if(event)sent=await sendQueuedWelcome(svc,eventId,target.telegramId,event.body,token);}
+   return reply({ok:true,hasAccount:true,email:target.email,message:'Đã lưu email và mật khẩu. Nhân viên có thể đăng nhập ngay bằng email này.'+(sent?' Đã gửi thông báo Telegram.':' Thông báo Telegram cần kiểm tra hàng đợi/bot.')+(logError?' Nhật ký đang cần kiểm tra.':'')});
+  }catch(e){await svc.from('viral_account_audit').update({status:loginSaved?'login-saved-followup-error':'failed',auth_user_id:authId||null}).eq('id',auditId);if(loginSaved)return reply({ok:true,email:target.email,message:'Đăng nhập đã được lưu; thông báo hoặc nhật ký cần quản trị kiểm tra.'});throw e;}
+ }
  const base=process.env.VIRAL_WEB_URL;if(!base||!/^https:\/\//.test(base))throw Error('Cần cấu hình VIRAL_WEB_URL là domain HTTPS của web.');
  const token=process.env.TELEGRAM_BOT_TOKEN;if(!token)throw Error('Chưa cấu hình bot Telegram.');
  if(body.action==='resend'){

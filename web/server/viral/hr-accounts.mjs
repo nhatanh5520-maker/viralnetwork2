@@ -11,3 +11,11 @@ export function employeeAccountData(data,actor,input){
  next.adminAudit??=[];next.adminAudit.push({id:crypto.randomUUID(),at:new Date().toISOString(),actor:actor.id,name:actor.name,action:'hr-account',target:telegramId,reason:created?'HR tạo nhân viên và tài khoản web':'HR cấp tài khoản web cho nhân viên cũ',changes:{Employees:{headers:h,before:created?[]:data.books.main.Employees.slice(1).filter(r=>String(r[0])===telegramId),after:[row]}}});
  return {data:next,email,telegramId,name:String(row[h.indexOf('name')]),created};
 }
+
+export function manualAccountInput(data,actor,input){
+ const telegramId=String(input.telegram_id||'').trim(),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||'');
+ if(!/^[1-9]\d{4,19}$/.test(telegramId)||!/^\S+@\S+\.\S+$/.test(email)||email.length>254||password.length<6||password.length>128)throw Error('Email/Telegram ID không hợp lệ hoặc mật khẩu chưa đủ 6 ký tự.');
+ const cells=data.books.main.Employees,h=cells[0],r=cells.slice(1).find(row=>String(row[h.indexOf('telegram_id')])===telegramId);if(!r||String(r[h.indexOf('active')]).toLowerCase()!=='true')throw Error('Không thấy nhân viên đang hoạt động với Telegram ID này.');
+ if(actor.role!=='director'&&String(r[h.indexOf('role')])!=='employee')throw Error('HR chỉ cấp đăng nhập cho nhân viên; tài khoản quản lý cần Ban giám đốc.');
+ return {telegramId,email,password,employee:Object.fromEntries(h.map((k,i)=>[k,r[i]??'']))};
+}

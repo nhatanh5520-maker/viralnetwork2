@@ -1,0 +1,11 @@
+import {NextResponse} from 'next/server';import {createClient} from '@supabase/supabase-js';import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {createRuntime} from '../../../../../server/viral/runtime.mjs';import vm from 'node:vm';
+export const runtime='nodejs';
+export async function POST(req:Request){try{
+ sameOrigin(req);const raw=await req.text();if(Buffer.byteLength(raw)>20000)throw Error('Yêu cầu quá lớn.');const body=JSON.parse(raw),initData=String(body.initData||''),user=initData?null:await webMember();if(!user&&!initData)throw Error('Cần đăng nhập.');
+ const {svc,data}=await loadViral(),rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN});rt.context.__input=initData||'supabase';const actor=vm.runInContext('auth_(__input)',rt.context,{timeout:5000});
+ const {data:member,error:me}=await svc.from('viral_members').select('auth_user_id').eq('employee_id',actor.id).eq('active',true).single();if(me||!member)throw Error('Bạn chưa có đăng nhập web.');const {data:found,error:fe}=await svc.auth.admin.getUserById(member.auth_user_id);if(fe||!found.user?.email)throw Error('Không đọc được đăng nhập.');
+ if(body.action==='info')return NextResponse.json({ok:true,email:found.user.email},{headers:{'Cache-Control':'no-store'}});
+ if(Object.hasOwn(body,'email'))throw Error('Nhân viên không được đổi email đăng nhập.');const old=String(body.currentPassword||''),password=String(body.newPassword||'');if(!old||password.length<6||password.length>128)throw Error('Nhập mật khẩu hiện tại và mật khẩu mới tối thiểu 6 ký tự.');
+ const auth=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,{auth:{persistSession:false,autoRefreshToken:false}});const {data:session,error:se}=await auth.auth.signInWithPassword({email:found.user.email,password:old});if(se||session.user?.id!==member.auth_user_id)throw Error('Mật khẩu hiện tại không đúng.');const {error:ue}=await auth.auth.updateUser({password});if(ue)throw Error('Mật khẩu mới không đạt chính sách Supabase.');await auth.auth.signOut({scope:'local'});
+ return NextResponse.json({ok:true},{headers:{'Cache-Control':'no-store'}});
+ }catch(e){return NextResponse.json({error:e instanceof Error?e.message:'Chưa đổi được mật khẩu.'},{status:400,headers:{'Cache-Control':'no-store'}});}}

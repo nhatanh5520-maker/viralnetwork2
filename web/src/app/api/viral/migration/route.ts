@@ -37,12 +37,17 @@ export async function POST(req:Request){try{
   if(body.confirm!=='CHUYEN DU LIEU MOI'||!body.acknowledge)throw Error('Cần xác nhận bản Excel cuối và đã xem vấn đề dữ liệu.');
   if(body.mainVersion!==version)throw Error('Database vừa thay đổi. Làm mới trước khi kích hoạt.');
   const pub=migrationPublic(stage);if(!pub.ready)throw Error('Chưa chuyển đủ ảnh hoặc còn lỗi ngăn kích hoạt.');
+  if(current.staffRosterAuthoritative){
+   stage.data.candidate.archivedEmployees=structuredClone(current.archivedEmployees||[]);
+   stage.data.candidate.archivedEmployees.push({at:new Date().toISOString(),reason:'Roster nhập thử cũ; giữ roster đang dùng khi kích hoạt',table:stage.data.candidate.books.main.Employees});
+   stage.data.candidate.books.main.Employees=structuredClone(current.books.main.Employees);stage.data.candidate.staffRosterAuthoritative=true;
+  }
   const maps=body.mappings;if(!Array.isArray(maps)||maps.length>1000)throw Error('Liên kết tài khoản không hợp lệ.');
   const existing=await accounts(svc);for(const m of maps)if(!existing.some((a:any)=>a.auth_user_id===m.authUserId))throw Error('Tài khoản không nằm trong danh sách hiện có.');
   const own=maps.find((m:any)=>m.authUserId===user.authUserId);if(!own)throw Error('Cần liên kết tài khoản admin đang đăng nhập.');
   adminActor(stage.data.candidate,{...user,employeeId:own.employeeId},process.env.VIRAL_ADMIN_EMAILS||'');
   // Retain the latest GPS/finance config, which may have changed after preparation.
-  const settings=stage.data.candidate.books.main.Settings;for(const [k,v] of current.books.main.Settings)if(['office_name','office_lat','office_lng','radius_m','start_time','end_time','lunch_start','lunch_end'].includes(k)&&String(v)){const r=settings.find((r:any)=>r[0]===k);if(r)r[1]=v;else settings.push([k,v]);}
+  const settings=stage.data.candidate.books.main.Settings;for(const [k,v] of current.books.main.Settings)if(['hr_telegram_id','accountant_telegram_id','office_name','office_lat','office_lng','radius_m','start_time','end_time','lunch_start','lunch_end'].includes(k)&&(String(v)||current.staffRosterAuthoritative&&['hr_telegram_id','accountant_telegram_id'].includes(k))){const r=settings.find((r:any)=>r[0]===k);if(r)r[1]=v;else settings.push([k,v]);}
   if(current.webFinance)stage.data.candidate.webFinance=current.webFinance;
   const {data:saved,error:ce}=await svc.rpc('viral_stage_commit',{stage_id:stage.id,expected_version:stage.version,new_data:stage.data});if(ce||!saved)throw Error('Dữ liệu nhập thử vừa thay đổi.');
   const {data:backupId,error:ae}=await svc.rpc('viral_activate_migration',{stage_id:stage.id,stage_version:stage.version+1,main_version:version,mappings:maps});if(ae)throw Error('Chưa kích hoạt: dữ liệu hoặc liên kết tài khoản thay đổi. Làm mới rồi kiểm tra lại.');return reply({ok:true,backupId});

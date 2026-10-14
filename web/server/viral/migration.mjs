@@ -20,6 +20,10 @@ export function prepareMigration(bundle,current){
    return k.endsWith('_id')||k==='bank_account'?id(value):value;
   }))];candidate.books.main[name]=cells;
  }
+ if(current.staffRosterAuthoritative){
+  candidate.archivedEmployees=structuredClone(current.archivedEmployees||[]);candidate.archivedEmployees.push({at:new Date().toISOString(),reason:'Roster trong dữ liệu cũ; không ghi đè danh sách chính',table:candidate.books.main.Employees});
+  candidate.books.main.Employees=structuredClone(current.books.main.Employees);candidate.staffRosterAuthoritative=true;counts['Employees imported history']=counts.Employees;counts.Employees=candidate.books.main.Employees.length-1;
+ }
  const people=rows(candidate.books.main.Employees),peopleIds=new Set(people.map(p=>id(p.telegram_id))),prodIds=new Set(rows(candidate.books.main.ProductionItems).map(p=>id(p.id))),taskIds=new Set(rows(candidate.books.main.Tasks).map(p=>id(p.id))),expenseIds=new Set(rows(candidate.books.main.Expenses).map(p=>id(p.id)));
  for(const [table,key] of [['Employees','telegram_id'],['ProductionItems','id'],['Tasks','id'],['Attendance','id'],['Expenses','id'],['Projects','code'],['Settings','key']]){const seen=new Set();for(const row of rows(candidate.books.main[table])){const k=id(row[key]);if(!k||seen.has(k))throw Error(table+': thiếu hoặc trùng khóa '+key);seen.add(k);}}
  for(const [table,key,allowed] of [['Tasks','assignee_id',peopleIds],['Attendance','telegram_id',peopleIds],['Expenses','telegram_id',peopleIds],['Expenses','production_id',prodIds],['ProductionTeam','production_id',prodIds],['ProductionTaskLinks','production_id',prodIds],['ProductionTaskLinks','task_id',taskIds],['ExpenseAttachments','expense_id',expenseIds]])for(const row of rows(candidate.books.main[table]))if(id(row[key])&&!allowed.has(id(row[key])))issues.push({table,key,value:id(row[key]),record:id(row.id||row.production_id||row.expense_id),message:'Liên kết chưa tìm thấy; giữ nguyên để đối chiếu.'});
@@ -51,8 +55,8 @@ export function prepareMigration(bundle,current){
  }else issues.push({table:'BankProfiles',message:'Bản xuất chính không có hồ sơ riêng; giữ hồ sơ hiện có của web. Cần bổ sung bản xuất hồ sơ cũ nếu có.'});
  if(current.webFinance)candidate.webFinance=structuredClone(current.webFinance);
  // Deliberately keep live web admin office settings, not stale exported GPS.
- const gpsKeys=['office_name','office_lat','office_lng','radius_m','start_time','end_time','lunch_start','lunch_end'];
- const live=current.books.main.Settings||[],settings=candidate.books.main.Settings;for(const [key,value] of live.slice(1))if(gpsKeys.includes(key)&&str(value)){const found=settings.find(r=>r[0]===key);if(found)found[1]=value;else settings.push([key,value]);}
+ const gpsKeys=['hr_telegram_id','accountant_telegram_id','office_name','office_lat','office_lng','radius_m','start_time','end_time','lunch_start','lunch_end'];
+ const live=current.books.main.Settings||[],settings=candidate.books.main.Settings;for(const [key,value] of live.slice(1))if(gpsKeys.includes(key)&&(str(value)||current.staffRosterAuthoritative&&['hr_telegram_id','accountant_telegram_id'].includes(key))){const found=settings.find(r=>r[0]===key);if(found)found[1]=value;else settings.push([key,value]);}
  const previews=[];for(const person of people.filter(p=>str(p.active).toLowerCase()==='true'))try{const rt=createRuntime(candidate,{employeeId:id(person.telegram_id)});rt.run('snapshotCore',['supabase']);previews.push({id:id(person.telegram_id),ok:true});}catch(e){previews.push({id:id(person.telegram_id),ok:false,error:e.message});}
  if(previews.some(x=>!x.ok))issues.push({table:'Runtime',message:'Có tài khoản không tải được app. Cần xử lý trước khi kích hoạt.',blocking:true});
  const result={kind:'viral-migration',source:{name:bundle.fileName,sha256:bundle.sourceSHA256},counts,issues,repairs,previews,candidate,files:[...manifest.values()],folderId:bundle.driveFolderId||'',originalWorkbook:bundle,status:'prepared',preparedAt:new Date().toISOString()};
