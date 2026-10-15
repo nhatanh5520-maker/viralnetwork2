@@ -1,6 +1,7 @@
-import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor} from '../../../../../server/viral/hr-accounts.mjs';import {readStaffRoster,applyAuthoritativeRoster} from '../../../../../server/viral/staff-roster.mjs';
+import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor} from '../../../../../server/viral/hr-accounts.mjs';import {readStaffRoster} from '../../../../../server/viral/staff-roster.mjs';
 import {createClient} from '@/lib/supabase/server';
 import {refreshStaffOperatorSession} from '../../../../../server/viral/staff-session.mjs';
+import {applyStaffRoster} from '../../../../../server/viral/staff-apply.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 const reply=(x:unknown,status=200)=>NextResponse.json(x,{status,headers:{'Cache-Control':'no-store'}});
 async function director(){const user=await webMember();if(!user)throw Error('Cần đăng nhập web.');const state=await loadViral(),actor=hrAccountActor(state.data,user,'',process.env.TELEGRAM_BOT_TOKEN);if(actor.role!=='director')throw Error('Chỉ Giám đốc được nhập bảng nhân sự.');return {user,actor,...state};}
@@ -30,7 +31,9 @@ export async function POST(req:Request){try{
  if(action==='apply'){
   if(String(form.get('confirm'))!=='DONG BO NHAN SU')throw Error('Cần xác nhận đồng bộ nhân sự.');
   const mappings=roster.people.map((p:any)=>({authUserId:st.data.accounts[p.telegram_id],employeeId:p.telegram_id,active:p.active}));if(mappings.some((m:any)=>!m.authUserId)||new Set(mappings.map((m:any)=>m.authUserId)).size!==mappings.length)throw Error('Chưa cấp đủ tài khoản hoặc có liên kết bị trùng.');
-  const data=applyAuthoritativeRoster(current,roster.people),{data:backupId,error:ae}=await svc.rpc('viral_staff_sync',{stage_id:st.id,stage_version:st.version,main_version:version,new_data:data,mappings});if(ae)throw Error('Chưa đồng bộ roster. Kiểm tra SQL hoặc dữ liệu vừa thay đổi.');return reply({ok:true,backupId});
+  const backupId=await applyStaffRoster({initial:{svc,data:current,version},stage:st,people:roster.people,mappings,reload:async()=>{
+    const fresh=await director();if(fresh.user.authUserId!==st.data.operator)throw Error('Phiên người nhập đã thay đổi.');return fresh;
+  }});return reply({ok:true,backupId});
  }
  throw Error('Thao tác không hợp lệ.');
  }catch(e){return reply({error:e instanceof Error?e.message:'Chưa đồng bộ được nhân sự.'},400);}}
