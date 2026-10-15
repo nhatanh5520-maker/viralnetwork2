@@ -54,3 +54,18 @@ createV20Project=function(initData,code,name,image){
  const values={code,name,created_by:u.id,created_at:new Date().toISOString(),telegram_group_chat_id:'',avatar_file_id:id};sheet.appendRow(headers.map(k=>values[k]??''));
  return {ok:true,projects:v20Projects_(),projectAvatars:webProjectImages_()};
 };
+
+// Total content includes pending and rejected Ideas within the same filter scope.
+function productionPageData_(initData,filters){
+ const u=auth_(initData),f=filters&&typeof filters==='object'?filters:{},team=teamRows_();
+ const project=String(f.project||'').trim().slice(0,120),q=String(f.q||'').trim().toLocaleLowerCase('vi').slice(0,100),status=String(f.status||'all'),day=String(f.day||''),dateType=['all','created_at','shoot_at','editor_received_at','final_completed_at','published_at','deadline'].includes(f.dateType)?f.dateType:'all',approvalKey=String(f.approvalKey||''),approvalStatus=String(f.approvalStatus||'');
+ if(!['all','doing','review'].includes(status)||day&&!/^\d{4}-\d{2}-\d{2}$/.test(day)||approvalKey&&!['idea_approval','script_approval','final_approval'].includes(approvalKey)||approvalStatus&&!['pending','Duyệt','Không duyệt'].includes(approvalStatus))throw Error('Bộ lọc sản xuất không hợp lệ');
+ const range=productionDateRange_(f.from||day,f.to||day);
+ const page=Math.max(0,Math.min(100000,Math.floor(Number(f.page)||0))),all=productionVisibleRows_(u,team),peopleById=q?new Map(people_().map(p=>[String(p.telegram_id),String(p.name)])):new Map();
+ const metric=String(f.metric||'all');if(!['all','approved','shooting','waiting','reviewing','edited','published'].includes(metric))throw Error('Thống kê không hợp lệ');
+ // Summary and drill-down share the same date/search/status scope. Metric is applied only to the list.
+ const scoped=all.filter(x=>productionStatMatches_(x,'all')&&(!q||[x.title,x.project,x.brief,x.note,...teamIds_(x,'VJ',team).map(id=>peopleById.get(id)||''),...teamIds_(x,'Editor',team).map(id=>peopleById.get(id)||''),...[x.cam_id,x.designer_id,x.thumbnail_assignee_id,x.approver_id].map(id=>peopleById.get(String(id))||'')].some(v=>String(v||'').toLocaleLowerCase('vi').includes(q)))&&(status==='all'||status==='review'&&x.stage==='brief'&&!x.idea_approval||status==='doing'&&!['ready','published'].includes(String(x.stage)))&&productionTaskRangeMatches_(x,dateType,range)&&(!approvalKey||!approvalStatus||String(x[approvalKey]||'')===(approvalStatus==='pending'?'':approvalStatus)));
+ const stats={};if(f.includeStats!==false)scoped.forEach(x=>{const key=String(x.project||'').trim();if(!stats[key])stats[key]={total:0,shooting:0,waiting:0,edited:0,published:0};const st=stats[key];for(const [field,bucket] of [['total','all'],['shooting','shooting'],['waiting','waiting'],['edited','edited'],['published','published']])if(productionStatMatches_(x,bucket))st[field]++});
+ const matches=scoped.filter(x=>productionStatMatches_(x,metric)&&(!project||String(x.project||'').trim()===project));
+ const start=page*20;return {ok:true,items:withProductionTeam_(matches.slice(start,start+20),team),total:matches.length,page,hasMore:start+20<matches.length,stats};
+}

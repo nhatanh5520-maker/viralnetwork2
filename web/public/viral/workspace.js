@@ -12,7 +12,7 @@ async function readProjectImage(file){
 }
 function bindProjectImagePreviews(root){root.querySelectorAll('[data-project-image]').forEach(input=>input.onchange=async()=>{const preview=input.parentElement.querySelector('img');try{const image=await readProjectImage(input.files?.[0]);preview.hidden=!image;if(image)preview.src='data:'+image.type+';base64,'+image.base64}catch(e){input.value='';preview.hidden=true;msg(e.message,true)}})}
 const workspaceProductionView=productionView;
-productionView=function(){workspaceProductionView();if(!productionReady)return;bindProjectImagePreviews($('screen'));
+productionView=function(){workspaceProductionView();if(!productionReady)return;bindProjectImagePreviews($('screen'));compactProductionCards();
  if(['leader','director'].includes(state.user.role)&&!approvalFocus){
   const projects=state.projects||[],section=$('screen').querySelector('.project-panel');
   if(section&&projects.length){const details=document.createElement('details');details.innerHTML='<summary>Thay ảnh đại diện dự án</summary><form id="projectAvatarForm"><label>Dự án<select name="project">'+projects.map(p=>'<option value="'+esc(projectCode(p))+'">'+esc(p)+'</option>').join('')+'</select></label><label>Ảnh mới<input name="image" type="file" accept="image/jpeg,image/png,image/webp" data-project-image required><img class="project-image-preview" alt="Xem trước ảnh dự án" hidden></label><button>Lưu ảnh đại diện</button></form>';section.append(details);bindProjectImagePreviews(details);details.querySelector('form').onsubmit=async e=>{e.preventDefault();try{const f=e.target,image=await readProjectImage(f.elements.image.files[0]);if(image)await run('saveProjectAvatar',f.elements.project.value,image)}catch(e){msg(e.message,true)}};}
@@ -22,7 +22,22 @@ function workspaceClockMarkup(){return '<div class="live-attendance-clock"><div 
 function updateWorkspaceClock(){const now=new Date();document.querySelectorAll('[data-live-clock]').forEach(el=>el.textContent=new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(now));document.querySelectorAll('[data-live-date]').forEach(el=>el.textContent=new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',weekday:'long',day:'2-digit',month:'long',year:'numeric'}).format(now));}
 setInterval(updateWorkspaceClock,1000);
 const workspaceAttendanceView=attendanceView;
-attendanceView=function(){workspaceAttendanceView();$('screen').insertAdjacentHTML('afterbegin','<div class="workspace-eyebrow">VIRAL / CHẤM CÔNG</div><h1 class="workspace-title">Một ngày làm việc hiệu quả</h1>'+workspaceClockMarkup());updateWorkspaceClock();};
+attendanceView=function(){
+ workspaceAttendanceView();const screen=$('screen');
+ const hero=screen.querySelector('.attendance-hero'),form=$('fieldClockForm'),button=$('fieldClockSubmit');
+ const top=document.createElement('section');top.className='card attendance-clock-panel';top.innerHTML=workspaceClockMarkup();
+ const actions=document.createElement('div');actions.className='attendance-primary-actions';
+ if(button){button.setAttribute('form','fieldClockForm');actions.append(button);}
+ else if(!state.attendanceAccess?.enabled){for(const id of ['in','out']){const b=$(id);if(b)actions.append(b);}}
+ else {const b=document.createElement('button');b.disabled=true;b.textContent='✓ Đã hoàn tất hôm nay';actions.append(b);}
+ top.append(actions);screen.prepend(top);
+ if(hero){
+  const location=document.createElement('section');location.className='card attendance-location';location.innerHTML='<h2>Địa điểm chấm công</h2>';if(form)location.append(form);
+  if(form)top.after(location);
+  const history=document.createElement('details');history.className='card attendance-records';const summary=document.createElement('summary');summary.textContent='Chi tiết GPS, xác nhận và lịch sử';history.append(summary);hero.classList.remove('card','attendance-hero');history.append(hero);screen.querySelector('.card:not(.attendance-clock-panel):not(.attendance-location)')?.after(history);
+ }
+ updateWorkspaceClock();
+};
 const workspaceHomeView=homeView;
 homeView=function(){
  workspaceHomeView();const screen=$('screen'),all=(state.tasks||[]).filter(t=>String(t.assignee_id)===String(state.user.id)),open=all.filter(t=>!['done','cancelled','canceled'].includes(t.status)),done=all.filter(t=>t.status==='done'),late=open.filter(t=>t.due_at&&Date.parse(t.due_at)<Date.now());
@@ -31,7 +46,9 @@ homeView=function(){
  const oldMetrics=screen.querySelector('.home-metrics');if(oldMetrics)oldMetrics.remove();
  const stats=document.createElement('div');stats.className='workspace-stats';stats.innerHTML=[['Tổng công việc',all.length,'Công việc của bạn'],['Đang thực hiện',open.length,'Đang chờ bạn xử lý'],['Đã hoàn thành',done.length,'Đã ghi nhận hoàn thành'],['Quá hạn',late.length,'Cần ưu tiên xử lý']].map(([label,count,hint])=>'<button data-workspace-tasks><small>'+label+'</small><strong>'+count+'</strong><span>'+hint+'</span></button>').join('');intro?.after(stats);stats.querySelectorAll('button').forEach(b=>b.onclick=()=>go('tasks'));
  const layout=document.createElement('div');layout.className='workspace-home-grid';const work=document.createElement('section');work.className='card workspace-attention';work.innerHTML='<div class="row"><h2>Công việc cần chú ý</h2><button class="secondary compact" data-workspace-more>Xem tất cả ↗</button></div>'+open.slice(0,5).map(t=>'<div class="workspace-task-row"><span class="task-dot"></span><div><b>'+esc(t.title)+'</b><small>'+esc(t.production_item?.project||t.category||'Công việc cá nhân')+'</small></div><span class="badge">'+taskLabel(t.status)+'</span></div>').join('')+(open.length?'':'<div class="workspace-empty">Bạn đã xử lý xong các công việc hiện có.</div>');work.querySelector('[data-workspace-more]').onclick=()=>go('tasks');layout.append(work);
- const attendance=screen.querySelector('.attendance-hero');if(attendance){attendance.insertAdjacentHTML('afterbegin',workspaceClockMarkup());layout.append(attendance);}stats.after(layout);updateWorkspaceClock();
+ const attendance=screen.querySelector('.attendance-hero');if(attendance)attendance.remove();
+ const a=state.attendance,kind=a?.check_out?'out':'in',point=a?.[kind+'_context'];
+ const status=document.createElement('button');status.type='button';status.className='home-attendance-status';status.textContent=(!a?'Chưa chấm công hôm nay':a.check_out?'Đã xuống ca · '+fmt(a.check_out).split(' ')[0]:'Đã vào ca · '+fmt(a.check_in).split(' ')[0])+(point&&point.status!=='approved'?' · '+(point.status==='rejected'?'Cần bổ sung thông tin':'Chờ xác nhận'):'');status.onclick=()=>go('attendance');stats.after(status);status.after(layout);layout.classList.add('workspace-home-single');
 };
 function workspaceShell(){
  if(!state?.user)return;
@@ -47,4 +64,42 @@ function workspaceShell(){
 const workspaceRender=render;
 render=function(){workspaceRender();workspaceShell();updateWorkspaceClock();};
 
+const expandedProductionTasks=new Set();
+function progressMarkup(progress){return '<div class="compact-task-progress"><div class="row"><small>Tiến độ toàn task</small><b>'+progress.percent+'%</b></div><progress max="100" value="'+progress.percent+'" aria-label="Tiến độ toàn task '+progress.percent+'%"></progress><small class="compact-task-step">'+esc(progress.label)+'</small></div>';}
+function compactProductionCards(){
+ const items=approvalFocus?[approvalFocus.item]:state.productionPage?.items||state.productionItems||[];
+ $('screen').querySelectorAll('.production-item').forEach((card,index)=>{
+  const x=items[index];if(!x)return;const key=String(x.id),progress=ViralTaskLayout.production(x),nodes=[...card.childNodes];
+  const details=document.createElement('details');details.className='compact-task-details';details.open=!!approvalFocus||expandedProductionTasks.has(key);
+  const summary=document.createElement('summary');summary.className='compact-task-summary';summary.innerHTML='<div class="compact-task-heading">'+projectAvatarMarkup(x.project,'project-avatar')+'<div><h2>'+esc(x.title)+'</h2><small>'+esc(x.project)+'</small></div>'+(x.stage==='published'?'<span class="badge">Đã đăng</span>':'')+'</div>'+progressMarkup(progress)+'<span class="compact-task-toggle"><span class="when-closed">Xem chi tiết ↗</span><span class="when-open">Thu gọn ↑</span></span>';
+  const body=document.createElement('div');body.className='task-expanded';nodes.forEach(node=>body.append(node));body.querySelector(':scope > .prod-thumb')?.remove();body.querySelector(':scope > .row')?.remove();details.append(summary,body);card.append(details);
+  details.ontoggle=()=>{if(details.open)expandedProductionTasks.add(key);else expandedProductionTasks.delete(key)};
+ });
+}
+const expandedPersonalTasks=new Set();
+function personalCompactCard(t){
+ const progress=ViralTaskLayout.task(t),production=t.production_item||{},project=production.project||t.project||t.category||'Công việc cá nhân',closed=t.status==='done';
+ const extra=closed&&t.production_id?'Phần việc của bạn đã hoàn thành':t._review?'Đang chờ bạn duyệt':progress.label;
+ return '<article class="personal-task-card"><details data-personal-task="'+esc(t.id)+'" '+(expandedPersonalTasks.has(String(t.id))?'open':'')+'><summary class="compact-task-summary"><div class="compact-task-heading">'+projectAvatarMarkup(project,'project-avatar')+'<div><small>'+esc(project)+'</small><h3>'+esc(t.title)+'</h3></div></div><small class="personal-task-deadline">'+(t.due_at?'Hạn: '+fmt(t.due_at):t.awaiting_assets?'Chờ bàn giao tư liệu · Chưa tính hạn edit':'Chưa có hạn')+'</small>'+progressMarkup(progress)+(extra!==progress.label?'<small class="personal-task-role">'+esc(extra)+'</small>':'')+'<span class="compact-task-toggle"><span class="when-closed">Xem chi tiết ↗</span><span class="when-open">Thu gọn ↑</span></span></summary><div class="task-expanded">'+(t._review?'<button type="button" data-open-work-approval="'+esc(t._review.production_id)+'" data-kind="'+esc(t._review.kind)+'">Mở để duyệt</button>':'')+(t._genericReview?'<div class="actions"><button data-review-queue="'+esc(t.id)+'" data-decision="done">Duyệt hoàn thành</button><button class="danger" data-review-queue="'+esc(t.id)+'" data-decision="revision">Yêu cầu sửa</button></div>':workTaskCard(t))+'</div></details></article>';
+}
+tasksView=function(){
+ const mine=String(state.user.id),tasks=sortPersonalWork((state.tasks||[]).filter(t=>String(t.assignee_id)===mine)).map(t=>({...t})),queue=state.reviewQueue;
+ for(const review of queue||[]){
+  if(review.operational_kind)continue;
+  if(review.production_id){const found=tasks.find(t=>String(t.production_id)===String(review.production_id));if(found){found._review=review;continue;}
+   const production=(state.productionItems||[]).find(x=>String(x.id)===String(review.production_id));tasks.push({...review,status:'open',assignee_id:mine,_review:review,production_item:production||{id:review.production_id,project:review.project,stage:'brief'},category:'Duyệt Idea',quantity:1,weight:1});
+  }else{const found=tasks.find(t=>String(t.id)===String(review.id));if(!found)tasks.push({...review,status:'open',assignee_id:mine,_genericReview:true,category:'Xác nhận công việc',quantity:1,weight:1});}
+ }
+ const groups=[['waiting','Chờ thực hiện'],['active','Đang thực hiện'],['done','Hoàn thành']],cancelled=tasks.filter(t=>ViralTaskLayout.group(t)==='cancelled');
+ $('screen').innerHTML='<div class="workspace-eyebrow">VIRAL / CÔNG VIỆC CÁ NHÂN</div><h1 class="workspace-title">Công việc của tôi</h1>'+(!Array.isArray(queue)?'<p class="muted">Đang tải các mục được phân công duyệt…</p>':'')+'<div class="personal-work-board">'+groups.map(([key,label])=>{const rows=tasks.filter(t=>ViralTaskLayout.group(t)===key);return '<section class="personal-work-column" data-work-group="'+key+'"><div class="row"><h2>'+label+'</h2><span class="work-group-count">'+rows.length+'</span></div>'+rows.map(personalCompactCard).join('')+(!rows.length?'<p class="muted work-empty">Chưa có công việc trong nhóm này.</p>':'')+'</section>'}).join('')+'</div>'+(cancelled.length?'<details class="card"><summary>Đã hủy ('+cancelled.length+')</summary>'+cancelled.map(personalCompactCard).join('')+'</details>':'');
+ $('screen').querySelectorAll('[data-personal-task]').forEach(d=>d.ontoggle=()=>{if(d.open)expandedPersonalTasks.add(d.dataset.personalTask);else expandedPersonalTasks.delete(d.dataset.personalTask)});
+ bindVJScript();bindEditorProgress();
+ $('screen').querySelectorAll('[data-open-production-work]').forEach(b=>b.onclick=()=>openProductionWork(b.dataset.openProductionWork));
+ $('screen').querySelectorAll('[data-open-work-approval]').forEach(b=>b.onclick=()=>openReviewTarget('',b.dataset.openWorkApproval,b.dataset.kind));
+ $('screen').querySelectorAll('[data-submit]').forEach(b=>b.onclick=()=>run('submitTask',b.dataset.submit));
+ $('screen').querySelectorAll('[data-review-queue]').forEach(b=>b.onclick=()=>reviewQueuedTask(b.dataset.reviewQueue,b.dataset.decision));
+};
+
 if(state?.user)render();
+
+
