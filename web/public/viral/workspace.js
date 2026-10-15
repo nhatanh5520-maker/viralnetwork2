@@ -77,6 +77,7 @@ function compactProductionCards(){
  });
 }
 const expandedPersonalTasks=new Set();
+const expandedWorkGroups=new Set();
 function personalCompactCard(t){
  const progress=ViralTaskLayout.task(t),production=t.production_item||{},project=production.project||t.project||t.category||'Công việc cá nhân',closed=t.status==='done';
  const extra=closed&&t.production_id?'Phần việc của bạn đã hoàn thành':t._review?'Đang chờ bạn duyệt':progress.label;
@@ -91,7 +92,8 @@ tasksView=function(){
   }else{const found=tasks.find(t=>String(t.id)===String(review.id));if(!found)tasks.push({...review,status:'open',assignee_id:mine,_genericReview:true,category:'Xác nhận công việc',quantity:1,weight:1});}
  }
  const groups=[['waiting','Chờ thực hiện'],['active','Đang thực hiện'],['done','Hoàn thành']],cancelled=tasks.filter(t=>ViralTaskLayout.group(t)==='cancelled');
- $('screen').innerHTML='<div class="workspace-eyebrow">VIRAL / CÔNG VIỆC CÁ NHÂN</div><h1 class="workspace-title">Công việc của tôi</h1>'+(!Array.isArray(queue)?'<p class="muted">Đang tải các mục được phân công duyệt…</p>':'')+'<div class="personal-work-board">'+groups.map(([key,label])=>{const rows=tasks.filter(t=>ViralTaskLayout.group(t)===key);return '<section class="personal-work-column" data-work-group="'+key+'"><div class="row"><h2>'+label+'</h2><span class="work-group-count">'+rows.length+'</span></div>'+rows.map(personalCompactCard).join('')+(!rows.length?'<p class="muted work-empty">Chưa có công việc trong nhóm này.</p>':'')+'</section>'}).join('')+'</div>'+(cancelled.length?'<details class="card"><summary>Đã hủy ('+cancelled.length+')</summary>'+cancelled.map(personalCompactCard).join('')+'</details>':'');
+ $('screen').innerHTML='<div class="workspace-eyebrow">VIRAL / CÔNG VIỆC CÁ NHÂN</div><h1 class="workspace-title">Công việc của tôi</h1>'+(!Array.isArray(queue)?'<p class="muted">Đang tải các mục được phân công duyệt…</p>':'')+'<div class="personal-work-board">'+groups.map(([key,label])=>{const rows=tasks.filter(t=>ViralTaskLayout.group(t)===key);return '<details class="personal-work-column" data-work-group="'+key+'" '+(expandedWorkGroups.has(key)?'open':'')+'><summary class="work-group-summary"><h2>'+label+'</h2><span class="work-group-count">'+rows.length+'</span><span class="work-group-arrow" aria-hidden="true">▸</span></summary>'+rows.map(personalCompactCard).join('')+'</details>'}).join('')+'</div>'+(cancelled.length?'<details class="card"><summary>Đã hủy ('+cancelled.length+')</summary>'+cancelled.map(personalCompactCard).join('')+'</details>':'');
+ $('screen').querySelectorAll('[data-work-group]').forEach(d=>d.ontoggle=()=>{if(d.open)expandedWorkGroups.add(d.dataset.workGroup);else expandedWorkGroups.delete(d.dataset.workGroup)});
  $('screen').querySelectorAll('[data-personal-task]').forEach(d=>d.ontoggle=()=>{if(d.open)expandedPersonalTasks.add(d.dataset.personalTask);else expandedPersonalTasks.delete(d.dataset.personalTask)});
  bindVJScript();bindEditorProgress();
  $('screen').querySelectorAll('[data-open-production-work]').forEach(b=>b.onclick=()=>openProductionWork(b.dataset.openProductionWork));

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 const runtimeDir=[process.cwd()+'/server/viral',process.cwd()+'/web/server/viral'].find(p=>fs.existsSync(p+'/business.gs'));
 if(!runtimeDir)throw Error('Không tìm thấy mã nghiệp vụ Viral Network');
 const source=fs.readFileSync(runtimeDir+'/business.gs','utf8');
-const webPolicy=fs.readFileSync(runtimeDir+'/web-policy.gs','utf8');
+const webPolicy=fs.readFileSync(runtimeDir+'/web-policy.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/payment-batches.gs','utf8');
 const allowed=new Set(JSON.parse(fs.readFileSync(runtimeDir+'/methods.json','utf8')));
 const chain=()=>new Proxy({}, {get:(_,key)=>key==='build'?()=>({}):key==='getHandlerFunction'?()=> '':()=>chain()});
 const colNumber=s=>[...s].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
