@@ -1,4 +1,6 @@
 import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor} from '../../../../../server/viral/hr-accounts.mjs';import {readStaffRoster,applyAuthoritativeRoster} from '../../../../../server/viral/staff-roster.mjs';
+import {createClient} from '@/lib/supabase/server';
+import {refreshStaffOperatorSession} from '../../../../../server/viral/staff-session.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 const reply=(x:unknown,status=200)=>NextResponse.json(x,{status,headers:{'Cache-Control':'no-store'}});
 async function director(){const user=await webMember();if(!user)throw Error('Cần đăng nhập web.');const state=await loadViral(),actor=hrAccountActor(state.data,user,'',process.env.TELEGRAM_BOT_TOKEN);if(actor.role!=='director')throw Error('Chỉ Giám đốc được nhập bảng nhân sự.');return {user,actor,...state};}
@@ -20,7 +22,10 @@ export async function POST(req:Request){try{
    if(before.user?.email!==credential.email){const {error:ad}=await svc.from('viral_account_audit').insert({actor_telegram_id:actor.id,target_telegram_id:credential.telegramId,auth_user_id:authId,email_before:before.user?.email||'',email_after:credential.email,operation:'staff-email'});if(ad)throw Error('Chạy viral-hr-accounts.sql trước khi đổi email theo Excel.');}
    const {error:ue}=await svc.auth.admin.updateUserById(authId,{email:credential.email,password:credential.password,email_confirm:true});if(ue)throw Error('Không cấp được đăng nhập cho '+credential.email+'. Kiểm tra email và chính sách mật khẩu Supabase.');}
   else{const {data,error:ae}=await svc.auth.admin.createUser({email:credential.email,password:credential.password,email_confirm:true});if(ae||!data.user)throw Error('Không tạo được đăng nhập cho '+credential.email);authId=data.user.id;}
-  st.data.accounts[credential.telegramId]=authId;const {data:saved,error:se}=await svc.from('viral_staff_imports').update({data:st.data,version:st.version+1}).eq('id',st.id).eq('version',st.version).select('id');if(se||!saved?.length)throw Error('Trạng thái thay đổi. Dùng cùng file để kiểm tra lại.');return reply({ok:true,id:st.id,version:st.version+1});
+  st.data.accounts[credential.telegramId]=authId;const {data:saved,error:se}=await svc.from('viral_staff_imports').update({data:st.data,version:st.version+1}).eq('id',st.id).eq('version',st.version).select('id');
+  // Refresh even when staging fails: Auth has already changed at this point.
+  if(authId===user.authUserId)await refreshStaffOperatorSession(await createClient(),credential,user.authUserId);
+  if(se||!saved?.length)throw Error('Trạng thái thay đổi. Dùng cùng file để kiểm tra lại.');return reply({ok:true,id:st.id,version:st.version+1});
  }
  if(action==='apply'){
   if(String(form.get('confirm'))!=='DONG BO NHAN SU')throw Error('Cần xác nhận đồng bộ nhân sự.');
