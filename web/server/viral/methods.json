@@ -71,6 +71,7 @@
   "saveFieldApprovers",
   "savePersonnel",
   "saveProductionAsset",
+  "saveProjectAvatar",
   "saveSchedule",
   "setEditorProgress",
   "setHrApprover",

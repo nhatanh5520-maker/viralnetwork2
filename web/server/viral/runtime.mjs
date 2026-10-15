@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 const runtimeDir=[process.cwd()+'/server/viral',process.cwd()+'/web/server/viral'].find(p=>fs.existsSync(p+'/business.gs'));
 if(!runtimeDir)throw Error('Không tìm thấy mã nghiệp vụ Viral Network');
 const source=fs.readFileSync(runtimeDir+'/business.gs','utf8');
+const webPolicy=fs.readFileSync(runtimeDir+'/web-policy.gs','utf8');
 const allowed=new Set(JSON.parse(fs.readFileSync(runtimeDir+'/methods.json','utf8')));
 const chain=()=>new Proxy({}, {get:(_,key)=>key==='build'?()=>({}):key==='getHandlerFunction'?()=> '':()=>chain()});
 const colNumber=s=>[...s].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
@@ -65,6 +66,13 @@ export function createRuntime(input={},user=null,env={}) {
   ScriptApp:{getProjectTriggers:()=>[],deleteTrigger(){},newTrigger:chain},
   UrlFetchApp:{fetch(){throw Error('Dịch vụ ngoài được xử lý bởi máy chủ web.');}},
   HtmlService:{createTemplateFromFile:()=>({evaluate:chain}),createHtmlOutput:chain},
+  __storeProjectImage:image=>{
+   if(!image||!['image/jpeg','image/png','image/webp'].includes(image.type)||typeof image.base64!=='string'||image.base64.length>2800000||!/^[A-Za-z0-9+/]*={0,2}$/.test(image.base64))throw Error('Ảnh dự án cần là JPG, PNG hoặc WebP dưới 2 MB.');
+   const bytes=Buffer.from(image.base64,'base64'),type=image.type;
+   const valid=type==='image/png'?bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):type==='image/jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP';
+   if(!valid||bytes.length<12||bytes.length>2*1024*1024)throw Error('Nội dung ảnh dự án không hợp lệ.');
+   const id=crypto.randomUUID();data.files[id]={name:'project-'+id,type,path:id,folder:'project-avatars'};uploads.push({id,bytes,type});return id;
+  },
   __user:user,__enqueue:(chatId,text)=>{if(!chatId)return false;data.outbox.push({id:crypto.randomUUID(),chatId:String(chatId),text:String(text),status:'pending',createdAt:new Date().toISOString()});return true;}
  });
  vm.runInContext(source,context,{timeout:10000});
@@ -81,7 +89,8 @@ export function createRuntime(input={},user=null,env={}) {
  rememberDevice=function(initData){auth_(initData);return {ok:true};};
  forgetDevice=function(initData){auth_(initData);return {ok:true};};
  `,context,{timeout:10000});
- const run=(name,args=[],internal=false)=>{if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);context.__call=name;context.__args=args;return vm.runInContext('globalThis[__call](...__args)',context,{timeout:20000});};
+ vm.runInContext(webPolicy,context,{timeout:10000});
+ const run=(name,args=[],internal=false)=>{if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);context.__call=name;context.__args=args;const result=vm.runInContext('globalThis[__call](...__args)',context,{timeout:20000});if(result&&typeof result==='object'&&!Array.isArray(result)&&(result.projects||result.user||result.item))result.projectAvatars=vm.runInContext('webProjectImages_()',context,{timeout:5000});return result;};
  return {data,uploads,context,run};
 }
 export function initializeData(){const rt=createRuntime();for(const name of ['setupV20','setupPersonnel','setupV20Features','setupFieldAttendance','setupV2022'])rt.run(name,[],true);return rt.data;}

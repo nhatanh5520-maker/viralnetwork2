@@ -1,3 +1,4 @@
+import {retainProjectImages} from '../../../../../server/viral/project-images.mjs';
 import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {JWT} from 'google-auth-library';
 import {webMember,loadViral,sameOrigin} from '@/lib/viral';import {adminActor} from '../../../../../server/viral/admin.mjs';
 import {prepareMigration,migrationPublic,copyDriveBill,rewriteBillURLs} from '../../../../../server/viral/migration.mjs';
@@ -49,6 +50,7 @@ export async function POST(req:Request){try{
   // Retain the latest GPS/finance config, which may have changed after preparation.
   const settings=stage.data.candidate.books.main.Settings;for(const [k,v] of current.books.main.Settings)if(['hr_telegram_id','accountant_telegram_id','office_name','office_lat','office_lng','radius_m','start_time','end_time','lunch_start','lunch_end'].includes(k)&&(String(v)||current.staffRosterAuthoritative&&['hr_telegram_id','accountant_telegram_id'].includes(k))){const r=settings.find((r:any)=>r[0]===k);if(r)r[1]=v;else settings.push([k,v]);}
   if(current.webFinance)stage.data.candidate.webFinance=current.webFinance;
+  retainProjectImages(stage.data.candidate,current);
   const {data:saved,error:ce}=await svc.rpc('viral_stage_commit',{stage_id:stage.id,expected_version:stage.version,new_data:stage.data});if(ce||!saved)throw Error('Dữ liệu nhập thử vừa thay đổi.');
   const {data:backupId,error:ae}=await svc.rpc('viral_activate_migration',{stage_id:stage.id,stage_version:stage.version+1,main_version:version,mappings:maps});if(ae)throw Error('Chưa kích hoạt: dữ liệu hoặc liên kết tài khoản thay đổi. Làm mới rồi kiểm tra lại.');return reply({ok:true,backupId});
  }
