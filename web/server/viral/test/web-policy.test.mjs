@@ -27,3 +27,14 @@ test('Leader and Director can create and update project images; employees and fa
  const id=Object.keys(data.files)[0];assert.ok(projectImageFile(data,{employeeId:'1004'},id));assert.equal(projectImageFile(data,{employeeId:'not-an-employee'},id),null);data.files.bill={folder:'bills'};assert.equal(projectImageFile(data,{employeeId:'1004'},'bill'),null);delete data.files.bill;
  const migrated=initializeData();retainProjectImages(migrated,data);assert.equal(migrated.books.main.Projects.length,3);assert.equal(Object.keys(migrated.files).length,2);
 });
+
+test('Leader deletion requires confirmation, keeps a snapshot and appears in admin history',async()=>{
+ const {adminSnapshot}=await import('../admin.mjs');const rt=createRuntime(fixture(),{employeeId:'1001'});rt.run('createProductionItem',['supabase',{...idea}]);
+ assert.throws(()=>rt.run('deleteProductionIdea',['supabase',idea.request_id,'Hủy nội dung']),/xác nhận/);
+ assert.ok(rt.run('snapshotHome',['supabase']).tasks.length>0);
+ rt.run('decideProductionApproval',['supabase',idea.request_id,'idea_approval','Duyệt','']);
+ rt.run('deleteProductionIdea',['supabase',idea.request_id,'Hủy nội dung',true]);assert.equal(rt.run('snapshotHome',['supabase']).tasks.length,0);
+ const report=adminSnapshot(rt.data,{id:'1003'},1),event=report.audit.find(x=>x.target===idea.request_id&&x.action==='Xóa task');assert.ok(event);assert.equal(event.actor,'1001');assert.equal(event.reason,'Hủy nội dung');assert.equal(event.snapshot.item.title,idea.title);assert.equal(event.snapshot.item.idea_approval,'Duyệt');assert.ok(event.snapshot.tasks.length);
+ rt.run('deleteProductionIdea',['supabase',idea.request_id,'Hủy lại',true]);assert.equal(adminSnapshot(rt.data,{id:'1003'},2).audit.filter(x=>x.action==='Xóa task').length,1);
+ rt.run('restoreProductionIdea',['supabase',idea.request_id]);assert.ok(adminSnapshot(rt.data,{id:'1003'},3).audit.some(x=>x.action==='Khôi phục task'));
+});

@@ -96,5 +96,6 @@
   "updateProductionIdea",
   "updateProductionThumbnail",
   "updateV20ExpenseBank",
+  "updateWebProject",
   "v20ExpenseStatus"
 ]
