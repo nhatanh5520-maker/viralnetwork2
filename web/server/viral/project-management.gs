@@ -32,3 +32,10 @@ function updateWebProject(init,oldCode,input){const u=webProjectManager_(init);i
 // department permissions, trash snapshots and restoration remain unchanged.
 const webConfirmedDelete_=deleteProductionIdea;
 deleteProductionIdea=function(init,id,reason,confirmed){const u=auth_(init);if(role_(u.role)==='leader'&&confirmed!==true)throw Error('Cần xác nhận trước khi xóa task.');return webConfirmedDelete_(init,id,reason);};
+
+// All Leaders can delete/restore production tasks; assignment/edit permissions stay unchanged.
+leaderProductionDelete_=function(u,x){return role_(u.role)==='leader';};
+// Production is a company-wide overview for Leaders. Personal tasks and
+// selected-approver checks use their own existing rules and are not elevated.
+const webProductionVisibility_=productionVisibleRows_;
+productionVisibleRows_=function(u,team){return webProductionVisibility_(role_(u.role)==='leader'?{...u,role:'director'}:u,team);};
