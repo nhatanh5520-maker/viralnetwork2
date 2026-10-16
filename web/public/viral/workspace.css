@@ -27,3 +27,32 @@ body{max-width:none;background:var(--bg);font-size:14px;color:var(--text)}a{colo
 .production-filter-panel>summary{display:flex;align-items:center;gap:12px;list-style:none;cursor:pointer;padding:3px 0}.production-filter-panel>summary::-webkit-details-marker{display:none}.production-filter-panel>summary>span:first-child{flex:1;font-size:16px;font-weight:700}.production-filter-panel>summary small{color:var(--muted);font-weight:400}.production-filter-panel .filter-chevron{color:var(--green)}.production-filter-panel[open] .filter-chevron{transform:rotate(180deg)}.production-filter-body{border-top:1px solid var(--line);margin-top:17px;padding-top:15px}.production-filter-body .production-search{padding:0;margin:0;border:0;background:none}.production-filter-body>section{margin:0;padding:0;border:0;background:none}.production-filter-body .production-search-controls{display:block}.production-filter-body .production-search-controls input{width:100%}.production-filter-body>.actions{margin-top:15px;flex-wrap:wrap}.production-active-filters{display:block;color:var(--green);margin:0 0 18px;overflow-wrap:anywhere}.project-remove-image{display:flex;align-items:center;gap:10px}.project-remove-image input{width:20px;height:20px;margin:0}
 
 .workspace-brand{justify-content:center;margin:12px 0 26px}.workspace-brand .workspace-company-logo{width:210px;max-width:100%;height:auto;aspect-ratio:288/157;border-radius:12px}.workspace-slogan{border-color:#607a42}.workspace-slogan strong{color:#fff;font-family:'Be Vietnam Pro',sans-serif;font-size:16px;font-weight:700;line-height:1.85}.workspace-sidebar-footer{position:static;margin-top:24px}@media(min-width:1100px){.workspace-ready #workspaceSidebar{overflow-y:auto}}
+
+/* Studio: soft green light, centered slogan B, stronger navigation. */
+body.workspace-ready{background:radial-gradient(ellipse at 100% 0,#25402b66,transparent 52%),#0c1114;background-attachment:fixed}
+.workspace-ready .hero{background:transparent}
+.workspace-slogan{display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;padding:21px 9px;border:1px solid #46533f;background:#0c1514;border-radius:16px}
+.workspace-slogan::before,.workspace-slogan::after{content:"";display:block;width:25px;height:1px;background:#849b6a;margin:3px 0}
+.workspace-slogan strong{font-size:15px;font-weight:700;line-height:1.65;color:#fff}
+.workspace-slogan strong+strong{margin-top:0}
+.workspace-ready h1,.workspace-ready h2,.workspace-ready h3{font-weight:600}
+.workspace-stats{gap:14px}
+.workspace-stats button{min-height:150px;padding:21px;border-color:#2b3833;background:#151e20}
+.workspace-stats strong{font-size:32px;font-weight:700;margin:15px 0 10px}
+.workspace-home-grid>.card{border-color:#2b3833;background:#141d20}
+.workspace-ready .project-card{background:linear-gradient(145deg,#1b2825,#151e22);border-color:#34443b;border-radius:18px}
+.workspace-ready .production-item{border-color:#2d3b34;background:#141e21;border-radius:18px}
+.workspace-ready .compact-task-details>summary{border-radius:17px}
+@media(min-width:1100px){
+.workspace-ready #workspaceSidebar{background:radial-gradient(ellipse at 0 0,#2d492b70,transparent 48%),linear-gradient(160deg,#102019,#0c1214 65%);border-right-color:#2b3b30}
+.workspace-ready #workspaceSidebar nav{gap:9px}
+.workspace-ready #workspaceSidebar nav button{position:relative;font-weight:700;font-size:14px;color:#b8c6bd;border-radius:14px;padding:16px 17px;transition:background .18s,color .18s}
+.workspace-ready #workspaceSidebar nav button:hover{background:#22362b;color:#f4f5f5}
+.workspace-ready #workspaceSidebar nav button.on{background:linear-gradient(100deg,#35502a,#22371f);color:#c9fa9a;box-shadow:0 7px 18px #00000020}
+.workspace-ready #workspaceSidebar nav button.on::before{content:"";position:absolute;left:0;top:15px;bottom:15px;width:3px;background:#bafa64;border-radius:3px}
+.workspace-ready #workspaceSidebar nav button.on::after{content:"›";margin-left:auto;font-size:23px;line-height:1}
+.workspace-sidebar-footer{padding:18px 12px;border-top:1px solid #2b3b30;line-height:1.8}
+.workspace-sidebar-footer button{font-weight:600}
+}
+@media(max-width:700px){.workspace-stats{gap:10px}.workspace-stats button{min-height:124px;padding:16px}.workspace-stats strong{font-size:28px;margin:12px 0 9px}}
+@media(prefers-reduced-motion:reduce){.workspace-ready #workspaceSidebar nav button{transition:none}}
