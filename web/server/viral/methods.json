@@ -92,6 +92,7 @@
   "submitV20Expense",
   "submitV20Loan",
   "supplementFieldAttendance",
+  "syncWebProjectDirectory",
   "toggleLike",
   "updateProductionIdea",
   "updateProductionThumbnail",

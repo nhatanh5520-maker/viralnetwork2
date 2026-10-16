@@ -18,3 +18,24 @@ export function retainProjectImages(candidate,current){
   match[column]=id;candidate.files??={};candidate.files[id]=structuredClone(file);
  }
 }
+
+// The approved web directory takes precedence over a later, older workbook.
+export function retainProjectDirectory(candidate,current){
+ if(current.properties?.WEB_PROJECT_DIRECTORY_AUTHORITATIVE!=='true')return;
+ const live=current.books?.main?.Projects||[],target=candidate.books.main.Projects;
+ if(!live.length||!target?.length)return;
+ const lh=live[0],th=target[0];for(const key of lh)if(!th.includes(key))th.push(key);
+ for(const row of live.slice(1)){
+  const code=String(row[lh.indexOf('code')]||'');if(!code)continue;
+  let match=target.slice(1).find(r=>String(r[th.indexOf('code')]).toUpperCase()===code.toUpperCase());
+  const oldLabel=match?String(match[th.indexOf('code')])+' - '+String(match[th.indexOf('name')]):'',newLabel=code+' - '+String(row[lh.indexOf('name')]);
+  if(!match){match=[];target.push(match);}for(const key of lh)match[th.indexOf(key)]=row[lh.indexOf(key)]??'';
+  if(oldLabel&&oldLabel!==newLabel)for(const [name,matrix] of Object.entries(candidate.books.main)){
+   if(['Projects','ProjectAudit','PaymentBatches','Notifications','Settings'].includes(name))continue;
+   const col=matrix[0]?.indexOf('project');if(col>=0)for(const item of matrix.slice(1))if(item[col]===oldLabel)item[col]=newLabel;
+  }
+ }
+ candidate.properties??={};candidate.properties.WEB_PROJECT_DIRECTORY_AUTHORITATIVE='true';
+ const general=(current.books.main.Settings||[]).find(r=>r[0]==='group_chat_id');if(general){const existing=candidate.books.main.Settings.find(r=>r[0]==='group_chat_id');if(existing)existing[1]=general[1];else candidate.books.main.Settings.push(structuredClone(general));}
+ if(current.books.main.ProjectAudit)candidate.books.main.ProjectAudit=structuredClone(current.books.main.ProjectAudit);
+}
