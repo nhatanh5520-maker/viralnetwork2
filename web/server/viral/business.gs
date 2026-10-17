@@ -1221,9 +1221,19 @@ function productionStatMatches_(x,metric){
 }
 
 function equipmentProjectOptions(initData,project){return readScope_(()=>{const u=auth_(initData),projects=v20Projects_();project=String(project||'');if(project&&project!=='Công việc nội bộ'&&!projects.includes(project))throw Error('Dự án không hợp lệ');return {projects,items:project&&project!=='Công việc nội bộ'?productionVisibleRows_(u,teamRows_()).filter(x=>String(x.project)===project).map(x=>({id:String(x.id),title:String(x.title),shoot_at:String(x.shoot_at||'')})):[]}})}
+// Performance scope follows the Leader's specialty across departments.
+function performanceAccessText_(p){return (String(p.job_title||'')+' '+String(p.department||'')).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/gi,'d').toLowerCase();}
+function performanceCanViewPerson_(u,p,actor){
+ if(isDirector_(u)||String(p.telegram_id)===String(u.id))return true;
+ if(u.role!=='leader'||role_(p.role)==='director')return false;
+ const leader=performanceAccessText_(actor||u),person=performanceAccessText_(p);
+ const content=/content|noi dung/.test(leader),media=/media/.test(leader);
+ if(content||media)return content&&/\bvj\b|\bkol\b|tal+ent/.test(person)||media&&/\bcam\b|\bquay\b|\beditor\b|\bedit\b|\bdung\b|ky thuat/.test(person);
+ return String(p.department)===String(u.department);
+}
 function personnelPerformance(initData,month,personId){return readScope_(()=>{
  const u=auth_(initData),period=performancePeriod_(month);month=period.month;
- const everyone=rows_('Employees'),people=everyone.filter(p=>isDirector_(u)||String(p.telegram_id)===String(u.id)||u.role==='leader'&&String(p.department)===String(u.department));
+ const everyone=rows_('Employees'),actor=everyone.find(p=>String(p.telegram_id)===String(u.id)),people=everyone.filter(p=>performanceCanViewPerson_(u,p,actor));
  personId=String(personId||'');const selected=personId?people.filter(p=>String(p.telegram_id)===personId):people;if(personId&&!selected.length)throw Error('Bạn không được xem hiệu suất của nhân viên này');
  const aliases=new Map();for(const p of everyone){aliases.set(String(p.telegram_id),String(p.telegram_id));for(const id of String(p.previous_telegram_ids||'').split(/[,;\s]+/).filter(Boolean))aliases.set(id,String(p.telegram_id))}
  const results=selected.map(p=>({id:String(p.telegram_id),name:hrLabel_(p),department:String(p.department||''),counts:{idea:0,script:0,shoot:0,edit:0,approved:0,thumbnail:0},completed:0,onTime:0,withDeadline:0,inProgress:0,overdue:0,items:[]})),byId=new Map(results.map(p=>[p.id,p])),companyVideos=new Set();
