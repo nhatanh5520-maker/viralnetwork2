@@ -1227,7 +1227,7 @@ function performanceCanViewPerson_(u,p,actor){
  if(isDirector_(u)||String(p.telegram_id)===String(u.id))return true;
  if(u.role!=='leader'||role_(p.role)==='director')return false;
  const leader=performanceAccessText_(actor||u),person=performanceAccessText_(p);
- const content=/content|noi dung/.test(leader),media=/media/.test(leader);
+ const content=/content|noi dung|sang tao/.test(leader),media=/media/.test(leader);
  if(content||media)return content&&/\bvj\b|\bkol\b|tal+ent/.test(person)||media&&/\bcam\b|\bquay\b|\beditor\b|\bedit\b|\bdung\b|ky thuat/.test(person);
  return String(p.department)===String(u.department);
 }
@@ -1377,7 +1377,7 @@ function refreshAttendanceHR_(){
 }
 
 // V20.22: production capabilities follow the specific job title, independently of access role.
-function productionCapabilities_(p){const text=String(p.job_title||p.department||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/gi,'d').toLowerCase(),out=[];if(/vj|kol|talent/.test(text))out.push('vj');if(/cam|quay|ky thuat/.test(text))out.push('cam');if(/editor|edit|dung/.test(text))out.push('editor');if(/design|thiet ke|do hoa/.test(text))out.push('designer');if(/content|noi dung/.test(text))out.push('content');if(out.includes('editor')||out.includes('designer'))out.push('thumbnail');return out;}
+function productionCapabilities_(p){const text=String(p.job_title||p.department||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/gi,'d').toLowerCase(),out=[];if(/vj|kol|talent/.test(text))out.push('vj');if(/cam|quay|ky thuat|\bktv\b/.test(text))out.push('cam');if(/editor|edit|dung/.test(text))out.push('editor');if(/design|thiet ke|do hoa/.test(text))out.push('designer');if(/content|noi dung/.test(text))out.push('content');if(out.includes('editor')||out.includes('designer'))out.push('thumbnail');return out;}
 function productionPickerPerson_(p){return {telegram_id:String(p.telegram_id),name:String(p.raw_name||p.name),employee_code:String(p.employee_code||''),job_title:String(p.job_title||p.department||''),department:String(p.department),role:role_(p.role),production_roles:productionCapabilities_(p)}}
 function validateProductionAssignments_(vj,cam,editors,thumbnail,before){const old=before||{},team=before?withProductionTeam_([before])[0]:{};for(const [role,ids,previous] of [['vj',vj,team.vj_ids||[]],['cam',[cam],[old.cam_id]],['editor',editors,team.editor_ids||[]],['thumbnail',[thumbnail],[old.thumbnail_assignee_id]]])for(const id of ids.filter(Boolean)){if(previous.map(String).includes(String(id)))continue;const p=person_(id);if(!p||!productionCapabilities_(p).includes(role))throw Error('Nhân viên '+(p?.raw_name||p?.name||id)+' không phù hợp vị trí '+role);}}
 

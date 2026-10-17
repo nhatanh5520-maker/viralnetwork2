@@ -1,4 +1,4 @@
-import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor} from '../../../../../server/viral/hr-accounts.mjs';import {readStaffRoster} from '../../../../../server/viral/staff-roster.mjs';
+import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor} from '../../../../../server/viral/hr-accounts.mjs';import {readStaffRoster,previewStaffProfiles,applyStaffProfiles} from '../../../../../server/viral/staff-roster.mjs';
 import {createClient} from '@/lib/supabase/server';
 import {refreshStaffOperatorSession} from '../../../../../server/viral/staff-session.mjs';
 import {applyStaffRoster} from '../../../../../server/viral/staff-apply.mjs';
@@ -7,7 +7,17 @@ const reply=(x:unknown,status=200)=>NextResponse.json(x,{status,headers:{'Cache-
 async function director(){const user=await webMember();if(!user)throw Error('Cần đăng nhập web.');const state=await loadViral(),actor=hrAccountActor(state.data,user,'',process.env.TELEGRAM_BOT_TOKEN);if(actor.role!=='director')throw Error('Chỉ Giám đốc được nhập bảng nhân sự.');return {user,actor,...state};}
 export async function POST(req:Request){try{
  sameOrigin(req);const {user,actor,svc,data:current,version}=await director(),form=await req.formData(),action=String(form.get('action')),file=form.get('file');
- if(!(file instanceof File)||file.size>5*1024*1024)throw Error('Chọn Excel nhân sự dưới 5 MB.');const roster=await readStaffRoster(Buffer.from(await file.arrayBuffer()));
+ if(!(file instanceof File)||file.size>5*1024*1024)throw Error('Chọn Excel nhân sự dưới 5 MB.');const profilesOnly=form.get('mode')==='profiles',roster=await readStaffRoster(Buffer.from(await file.arrayBuffer()),{profilesOnly});
+ if(profilesOnly){
+  const preview=previewStaffProfiles(current,roster.people,actor.id);
+  if(action==='preview')return reply({ok:true,people:roster.people,preview,sha256:roster.sha256,email:user.email,version});
+  if(action!=='profiles'||String(form.get('confirm'))!=='CAP NHAT HO SO')throw Error('Nhập CAP NHAT HO SO để cập nhật hồ sơ.');
+  if(Number(form.get('mainVersion'))!==version)throw Error('Dữ liệu đã thay đổi. Chọn lại file để xem đối chiếu mới nhất.');
+  const result=applyStaffProfiles(current,roster.people,actor.id);
+  if(result.preview.changes.length){const {data:saved,error}=await svc.from('viral_state').update({data:result.data,version:version+1}).eq('id','main').eq('version',version).select('id');if(error)throw Error('Chưa xác nhận được cập nhật hồ sơ. Tải lại trang để kiểm tra trước khi thử lại.');if(!saved?.length)throw Error('Dữ liệu vừa thay đổi. Chọn lại file để xem đối chiếu.');}
+  return reply({ok:true,preview:result.preview});
+ }
+
  if(action==='preview')return reply({ok:true,people:roster.people,sha256:roster.sha256,email:user.email});
  if(action==='prepare'){
   const own=roster.people.find((p:any)=>p.telegram_id===String(form.get('adminTelegramId'))&&p.role==='director'&&p.active);if(!own)throw Error('Chọn đúng nhân viên Giám đốc ứng với tài khoản bạn đang đăng nhập.');
