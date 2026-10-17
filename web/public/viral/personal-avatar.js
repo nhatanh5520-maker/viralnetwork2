@@ -1,0 +1,20 @@
+/* Self-service avatar controls; updates use the signed-in identity only. */
+const personalAvatarProfileView=profileView;
+profileView=function(){
+ personalAvatarProfileView();const card=document.createElement('section');card.className='card personal-avatar-editor';
+ card.innerHTML='<h2>Ảnh đại diện</h2><p class="muted">Chọn ảnh riêng cho hồ sơ và các mục hiển thị nhân sự trên web.</p><label>Chọn ảnh<input type="file" id="myAvatarFile" accept="image/jpeg,image/png,image/webp"></label><small>JPG, PNG hoặc WebP, tối đa 10 MB. Ảnh sẽ được cắt vuông và nén trước khi lưu.</small><div id="myAvatarCrop" hidden><canvas width="512" height="512" aria-label="Ảnh đại diện xem trước"></canvas><label>Phóng to<input id="myAvatarZoom" type="range" min="1" max="3" step="0.01" value="1"></label><label>Dịch ngang<input id="myAvatarX" type="range" min="-100" max="100" value="0"></label><label>Dịch dọc<input id="myAvatarY" type="range" min="-100" max="100" value="0"></label><div class="actions"><button type="button" id="myAvatarSave">Lưu ảnh</button><button type="button" class="secondary" id="myAvatarCancel">Hủy</button></div></div><button type="button" class="secondary" id="myAvatarRemove">Gỡ ảnh / dùng ảnh mặc định</button>';
+ $('screen').querySelector('.profile-card')?.after(card);
+ let image=null,selection=0;const file=$('myAvatarFile'),crop=$('myAvatarCrop'),canvas=card.querySelector('canvas'),zoom=$('myAvatarZoom'),horizontal=$('myAvatarX'),vertical=$('myAvatarY');
+ function draw(){if(!image)return;const side=Math.min(image.naturalWidth,image.naturalHeight)/Number(zoom.value),x=(image.naturalWidth-side)*(Number(horizontal.value)+100)/200,y=(image.naturalHeight-side)*(Number(vertical.value)+100)/200;canvas.getContext('2d').drawImage(image,x,y,side,side,0,0,512,512);}
+ const cancel=()=>{selection++;image=null;file.value='';crop.hidden=true;formDirty=false;};
+ file.onchange=async()=>{const chosen=file.files?.[0],serial=++selection;if(!chosen){cancel();return;}try{if(!['image/jpeg','image/png','image/webp'].includes(chosen.type)||chosen.size>10*1024*1024)throw Error('Chọn ảnh JPG, PNG hoặc WebP dưới 10 MB.');const url=URL.createObjectURL(chosen);let img;try{img=await new Promise((resolve,reject)=>{const next=new Image();next.onload=()=>resolve(next);next.onerror=()=>reject(Error('Không đọc được ảnh này.'));next.src=url;});}finally{URL.revokeObjectURL(url);}if(serial!==selection||!card.isConnected)return;if(!img.naturalWidth||img.naturalWidth*img.naturalHeight>40000000)throw Error('Ảnh quá lớn; chọn ảnh dưới 40 megapixel.');image=img;zoom.value='1';horizontal.value=vertical.value='0';crop.hidden=false;draw();formDirty=true;}catch(e){cancel();msg(e.message||String(e),true);}};
+ for(const control of [zoom,horizontal,vertical])control.oninput=draw;
+ $('myAvatarCancel').onclick=cancel;
+ async function save(action){if(busy)return;if(action==='remove'&&!confirm('Gỡ ảnh riêng và dùng ảnh chữ cái mặc định?'))return;if(action==='save'&&!image)return;
+  busy=true;card.querySelectorAll('input,button').forEach(el=>el.disabled=true);
+  try{let photo;if(action==='save'){const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.86));if(!blob||blob.size>500*1024)throw Error('Không nén được ảnh dưới 500 KB.');photo={name:'avatar.jpg',type:'image/jpeg',base64:await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('Không đọc được ảnh.'));reader.readAsDataURL(blob);})};}
+   msg('Đang lưu ảnh đại diện…');const result=await call('saveMyAvatar',{action,image:photo});if(!result?.ok)throw Error('Chưa lưu được ảnh đại diện.');state.personalAvatars=result.personalAvatars;avatarCache.delete(String(state.user.id));corePromise=null;formDirty=false;render();msg(result.warning);
+  }catch(e){msg(e.message||String(e),true);}finally{busy=false;if(card.isConnected)card.querySelectorAll('input,button').forEach(el=>el.disabled=false);}
+ }
+ $('myAvatarSave').onclick=()=>save('save');$('myAvatarRemove').onclick=()=>save('remove');
+};

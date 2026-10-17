@@ -103,14 +103,16 @@ function workspaceShell(){
  document.body.classList.add('workspace-ready');
 }
 const workspaceRender=render;
-render=function(){workspaceRender();workspaceShell();updateWorkspaceClock();};
+render=function(){workspaceRender();workspaceShell();hydrateAvatars();updateWorkspaceClock();};
 
 const expandedProductionTasks=new Set();
 function progressMarkup(progress){return '<div class="compact-task-progress"><div class="row"><small>Tiến độ toàn task</small><b>'+progress.percent+'%</b></div><progress max="100" value="'+progress.percent+'" aria-label="Tiến độ toàn task '+progress.percent+'%"></progress><small class="compact-task-step">'+esc(progress.label)+'</small></div>';}
 function compactProductionCards(){
  const items=approvalFocus?[approvalFocus.item]:state.productionPage?.items||state.productionItems||[];
  $('screen').querySelectorAll('.production-item').forEach((card,index)=>{
-  const x=items[index];if(!x)return;const key=String(x.id),progress=ViralTaskLayout.production(x),nodes=[...card.childNodes];
+  const x=items[index];if(!x)return;
+  const assets=card.querySelector('.vj-assets');if(assets){const disclosure=document.createElement('details');disclosure.className='vj-assets';const title=assets.querySelector('h3'),summary=document.createElement('summary');summary.innerHTML='<span>'+esc(title?.textContent||'VJ / Cam-op · Bàn giao tư liệu')+'</span><small class="asset-disclosure-open">Mở ▾</small><small class="asset-disclosure-close">Thu gọn ▴</small>';title?.remove();disclosure.append(summary);while(assets.firstChild)disclosure.append(assets.firstChild);assets.replaceWith(disclosure);}
+  const key=String(x.id),progress=ViralTaskLayout.production(x),nodes=[...card.childNodes];
   const details=document.createElement('details');details.className='compact-task-details';details.open=!!approvalFocus||expandedProductionTasks.has(key);
   const summary=document.createElement('summary');summary.className='compact-task-summary';summary.innerHTML='<div class="compact-task-heading">'+projectAvatarMarkup(x.project,'project-avatar')+'<div><h2>'+esc(x.title)+'</h2><small>'+esc(x.project)+'</small></div>'+(x.stage==='published'?'<span class="badge">Đã đăng</span>':'')+'</div>'+progressMarkup(progress)+'<span class="compact-task-toggle"><span class="when-closed">Xem chi tiết ↗</span><span class="when-open">Thu gọn ↑</span></span>';
   const body=document.createElement('div');body.className='task-expanded';nodes.forEach(node=>body.append(node));body.querySelector(':scope > .prod-thumb')?.remove();body.querySelector(':scope > .row')?.remove();details.append(summary,body);card.append(details);

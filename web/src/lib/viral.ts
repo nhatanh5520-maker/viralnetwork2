@@ -75,9 +75,9 @@ export async function invokeViral(method:string,args:any[],initData:string,user:
 }
 async function avatars(rt:any,ids:any){
  if(!Array.isArray(ids)||ids.length>8)throw Error('Danh sách ảnh đại diện không hợp lệ.');
- const token=process.env.TELEGRAM_BOT_TOKEN;if(!token)return {};
+ const token=process.env.TELEGRAM_BOT_TOKEN;
  const employees=rt.data.books.main.Employees||[];const allowed=new Set(employees.slice(1).map((r:any)=>String(r[0])));const out:Record<string,string>={};
- for(const id of [...new Set(ids.map(String))]){if(!allowed.has(id)||!/^\d+$/.test(id))continue;try{
+ for(const id of [...new Set(ids.map(String))]){if(!allowed.has(id)||!/^\d+$/.test(id))continue;const a=rt.data.books.main.UserAvatars||[],h=a[0]||[],custom=a.slice(1).find((r:any)=>String(r[h.indexOf('telegram_id')])===id);if(custom){out[id]=custom[h.indexOf('mode')]==='custom'&&custom[h.indexOf('file_id')]?'/api/viral/avatar?id='+encodeURIComponent(String(custom[h.indexOf('file_id')])):'';continue;}if(!token)continue;try{
   const photo=await fetch(`https://api.telegram.org/bot${token}/getUserProfilePhotos`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:id,limit:1})}).then(r=>r.json());
   const fid=photo.result?.photos?.[0]?.[0]?.file_id;if(!fid)continue;
   const file=await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fid)}`).then(r=>r.json());if(!file.result?.file_path)continue;

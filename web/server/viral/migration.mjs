@@ -1,3 +1,4 @@
+import {retainPersonalAvatars} from './personal-avatars.mjs';
 import {retainProjectImages,retainProjectDirectory} from './project-images.mjs';
 import crypto from 'node:crypto';
 import {initializeData,createRuntime} from './runtime.mjs';
@@ -58,7 +59,7 @@ export function prepareMigration(bundle,current){
  // Deliberately keep live web admin office settings, not stale exported GPS.
  const gpsKeys=['hr_telegram_id','accountant_telegram_id','office_name','office_lat','office_lng','radius_m','start_time','end_time','lunch_start','lunch_end'];
  const live=current.books.main.Settings||[],settings=candidate.books.main.Settings;for(const [key,value] of live.slice(1))if(gpsKeys.includes(key)&&(str(value)||current.staffRosterAuthoritative&&['hr_telegram_id','accountant_telegram_id'].includes(key))){const found=settings.find(r=>r[0]===key);if(found)found[1]=value;else settings.push([key,value]);}
- retainProjectDirectory(candidate,current);retainProjectImages(candidate,current);counts.Projects=candidate.books.main.Projects.length-1;
+ retainPersonalAvatars(candidate,current);retainProjectDirectory(candidate,current);retainProjectImages(candidate,current);counts.Projects=candidate.books.main.Projects.length-1;
  const previews=[];for(const person of people.filter(p=>str(p.active).toLowerCase()==='true'))try{const rt=createRuntime(candidate,{employeeId:id(person.telegram_id)});rt.run('snapshotCore',['supabase']);previews.push({id:id(person.telegram_id),ok:true});}catch(e){previews.push({id:id(person.telegram_id),ok:false,error:e.message});}
  if(previews.some(x=>!x.ok))issues.push({table:'Runtime',message:'Có tài khoản không tải được app. Cần xử lý trước khi kích hoạt.',blocking:true});
  const result={kind:'viral-migration',source:{name:bundle.fileName,sha256:bundle.sourceSHA256},counts,issues,repairs,previews,candidate,files:[...manifest.values()],folderId:bundle.driveFolderId||'',originalWorkbook:bundle,status:'prepared',preparedAt:new Date().toISOString()};

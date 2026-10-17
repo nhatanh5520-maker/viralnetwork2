@@ -31,6 +31,7 @@ function avatarNodes(id){return [...document.querySelectorAll('[data-avatar-id]'
 function paintAvatar(id,url){if(!url)return;avatarNodes(id).forEach(el=>{const initial=el.textContent||String(el.getAttribute('aria-label')||'?').charAt(0),image=document.createElement('img');image.alt='';image.loading='lazy';image.onerror=()=>{image.remove();el.textContent=initial;avatarCache.set(id,'')};el.textContent='';el.appendChild(image);image.src=url})}
 function hydrateAvatars(){
  if(!state||!document.querySelectorAll)return;
+ Object.entries(state.personalAvatars||{}).forEach(([id,url])=>avatarCache.set(id,url));
  const nodes=[...document.querySelectorAll('[data-avatar-id]')],own=String(state.user.id),photo=tg?.initDataUnsafe?.user?.photo_url;
  if(photo&&String(tg.initDataUnsafe.user.id)===own&&/^https:\/\//i.test(photo)&&!avatarCache.has(own))avatarCache.set(own,photo);
  const ids=[...new Set(nodes.map(el=>el.dataset.avatarId))];
@@ -40,7 +41,7 @@ function hydrateAvatars(){
 async function loadAvatarQueue(){
  if(loadAvatarQueue.running||!avatarQueue.length)return;
  loadAvatarQueue.running=true;
- try{while(avatarQueue.length){const ids=avatarQueue.splice(0,8);try{const photos=await call('avatarBatch',ids);ids.forEach(id=>{const url=String(photos?.[id]||'');avatarCache.set(id,url);avatarPending.delete(id);paintAvatar(id,url)})}catch(e){ids.forEach(id=>{avatarPending.delete(id);avatarCache.set(id,'')})}}}finally{loadAvatarQueue.running=false}
+ try{while(avatarQueue.length){const ids=avatarQueue.splice(0,8);try{const photos=await call('avatarBatch',ids);ids.forEach(id=>{const url=Object.hasOwn(state.personalAvatars||{},id)?state.personalAvatars[id]:String(photos?.[id]||'');avatarCache.set(id,url);avatarPending.delete(id);paintAvatar(id,url)})}catch(e){ids.forEach(id=>{avatarPending.delete(id);avatarCache.set(id,'')})}}}finally{loadAvatarQueue.running=false}
 }
 function patchSavedProductionItem(item,created=false){
  if(!state.productionPage?.items)return;

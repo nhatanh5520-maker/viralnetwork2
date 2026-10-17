@@ -92,3 +92,9 @@ body.workspace-ready{background:radial-gradient(ellipse at 100% 0,#25402b66,tran
 .workspace-ready:is([data-tab=tasks],[data-tab=production],[data-tab=utilities]) .hero{margin-bottom:0;padding-bottom:0;border-bottom:0}
 .workspace-ready:is([data-tab=tasks],[data-tab=production],[data-tab=utilities]) #workspaceTopbar{border-bottom:0}
 .workspace-ready:is([data-tab=tasks],[data-tab=production],[data-tab=utilities]) #message:empty{display:none}
+
+.vj-assets>summary{display:flex;align-items:center;justify-content:space-between;gap:14px;cursor:pointer;list-style:none;font-size:16px;font-weight:700;line-height:1.5;color:var(--text)}
+.vj-assets>summary::-webkit-details-marker{display:none}.vj-assets>summary small{font-size:11px;font-weight:600;color:var(--green);white-space:nowrap}
+.vj-assets:not([open]) .asset-disclosure-close,.vj-assets[open] .asset-disclosure-open{display:none}.vj-assets[open]>summary{margin-bottom:10px}
+.personal-avatar-editor canvas{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;border-radius:18px;margin:18px auto;background:#16201a}
+.personal-avatar-editor input[type=range]{padding:0;min-height:34px;width:100%;accent-color:var(--green)}.personal-avatar-editor>small{display:block;color:var(--muted);line-height:1.6;margin:8px 0 16px}.personal-avatar-editor>button{margin-top:16px}

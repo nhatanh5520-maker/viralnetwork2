@@ -1,0 +1,7 @@
+function webPersonalAvatars_(){const active=new Set(rows_('Employees').filter(p=>String(p.active).toLowerCase()==='true').map(p=>String(p.telegram_id)));if(!book_().getSheetByName('UserAvatars'))return {};return Object.fromEntries(rows_('UserAvatars').filter(p=>active.has(String(p.telegram_id))).map(p=>[String(p.telegram_id),p.mode==='custom'&&p.file_id?'/api/viral/avatar?id='+encodeURIComponent(String(p.file_id)):'']));}
+function saveMyAvatar(init,input){const u=auth_(init);if(!input||!['save','remove'].includes(input.action))throw Error('Thao tác ảnh không hợp lệ.');if(input.telegram_id!==undefined||input.employee_id!==undefined||input.user_id!==undefined)throw Error('Chỉ được đổi ảnh của chính mình.');
+ let file='';if(input.action==='save'){if(!input.image||String(input.image.base64||'').length>700000)throw Error('Ảnh sau nén cần dưới 500 KB.');file=__storePersonalImage(input.image);}
+ let sh=book_().getSheetByName('UserAvatars');if(!sh){sh=book_().insertSheet('UserAvatars');sh.appendRow(['telegram_id','file_id','mode','updated_at']);}
+ const a=sh.getDataRange().getValues(),h=a[0],i=a.findIndex((r,j)=>j>0&&String(r[h.indexOf('telegram_id')])===String(u.id)),values={telegram_id:String(u.id),file_id:file,mode:input.action==='save'?'custom':'none',updated_at:new Date().toISOString()};if(i>0)sh.getRange(i+1,1,1,h.length).setValues([h.map(k=>values[k]??'')]);else sh.appendRow(h.map(k=>values[k]??''));
+ return {ok:true,personalAvatars:webPersonalAvatars_(),warning:input.action==='save'?'Đã cập nhật ảnh đại diện.':'Đã gỡ ảnh đại diện.'};
+}
