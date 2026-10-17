@@ -1,2 +1,2 @@
-export const metadata={title:"Viral Network",description:"Ứng dụng làm việc Viral Network"};
+export const metadata={title:"Viral Network",description:"Ứng dụng làm việc Viral Network",manifest:"/manifest.webmanifest?v=viral-green-1",icons:{icon:[{url:"/icons/favicon-48.png?v=viral-green-1",sizes:"48x48",type:"image/png"}],apple:[{url:"/apple-touch-icon.png?v=viral-green-1",sizes:"180x180",type:"image/png"}]}};
 export default function Layout({children}:{children:React.ReactNode}){return <html lang="vi"><head><link rel="stylesheet" href="/brand-font.css" /></head><body>{children}</body></html>;}
