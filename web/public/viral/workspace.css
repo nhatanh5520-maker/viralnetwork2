@@ -98,3 +98,5 @@ body.workspace-ready{background:radial-gradient(ellipse at 100% 0,#25402b66,tran
 .vj-assets:not([open]) .asset-disclosure-close,.vj-assets[open] .asset-disclosure-open{display:none}.vj-assets[open]>summary{margin-bottom:10px}
 .personal-avatar-editor canvas{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;border-radius:18px;margin:18px auto;background:#16201a}
 .personal-avatar-editor input[type=range]{padding:0;min-height:34px;width:100%;accent-color:var(--green)}.personal-avatar-editor>small{display:block;color:var(--muted);line-height:1.6;margin:8px 0 16px}.personal-avatar-editor>button{margin-top:16px}
+.live-data-update{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border:1px solid #425b37;border-radius:12px;margin:14px 0;background:#1c2d20;color:#d1efb8;font-size:12px}
+.live-data-update button{font-size:11px;padding:8px 12px}
