@@ -1,6 +1,7 @@
 import 'server-only';
 import {createClient as createSupabaseClient} from '@supabase/supabase-js';
 import {createClient} from '@/lib/supabase/server';
+import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
 export function viralService(){
@@ -40,7 +41,9 @@ export async function invokeViral(method:string,args:any[],initData:string,user:
  const actor=vm.runInContext('auth_(__authInput)',rt.context,{timeout:5000});
  if(method==='financeReport'){
   if(actor.role!=='director')throw Error('Chỉ Ban giám đốc được xem Thu chi');
-  const {config,book}=await readFinanceBook(data);
+  const {config,book,detailBook,format}=await readFinanceBook(data);
+  if(format==='ledger-v2')return ledgerReport(book,detailBook,args[0]||{},config);
+  if(args[0]?.filterMode==='range')throw Error('Lọc khoảng ngày chỉ hỗ trợ mẫu Thu chi hai tab mới.');
   const temp=structuredClone(data),id='external_finance_read_only_book';
   temp.books[id]={[config.sheetName]:book.cells};temp.properties.FINANCE_SHEET_ID=id;temp.properties.FINANCE_SHEET_NAME=config.sheetName;
   const financeRuntime=createRuntime(temp,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,GRID_META:{[id]:{[config.sheetName]:book}},GRID_TIMEZONE:{[id]:book.timeZone}});
