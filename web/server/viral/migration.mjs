@@ -22,7 +22,7 @@ export function prepareMigration(bundle,current){
    return k.endsWith('_id')||k==='bank_account'?id(value):value;
   }))];candidate.books.main[name]=cells;
  }
- if(current.staffRosterAuthoritative){
+ if(current.staffRosterAuthoritative||bundle.preserveWebStaff===true){
   candidate.archivedEmployees=structuredClone(current.archivedEmployees||[]);candidate.archivedEmployees.push({at:new Date().toISOString(),reason:'Roster trong dữ liệu cũ; không ghi đè danh sách chính',table:candidate.books.main.Employees});
   candidate.books.main.Employees=structuredClone(current.books.main.Employees);candidate.staffRosterAuthoritative=true;counts['Employees imported history']=counts.Employees;counts.Employees=candidate.books.main.Employees.length-1;
  }
@@ -43,10 +43,10 @@ export function prepareMigration(bundle,current){
  for(const row of rows(candidate.books.main.Notifications))if(id(row.photo_file_id))manifest.set(id(row.photo_file_id),{id:id(row.photo_file_id),status:'pending'});
  for(const file of manifest.values())if(!/^[\w-]{15,150}$/.test(file.id))throw Error('ID tệp Drive không hợp lệ.');
  const notif=candidate.books.main.Notifications,nh=notif[0],status=nh.indexOf('status');for(const row of notif.slice(1))if(['pending','failed','sending'].includes(str(row[status])))row[status]='migration_hold';
- candidate.outbox=[];
+ candidate.outbox=[];candidate.migrationPolicy={preserveWebStaff:bundle.preserveWebStaff===true,replaceWebTestData:bundle.replaceWebTestData===true,telegramBotUsername:String(bundle.telegramBotUsername||'')};
  // Reuse the deployed private personnel book only when no new private export exists.
  const oldPrivate=current.properties?.HR_PRIVATE_SHEET_ID;
- if(oldPrivate&&current.books[oldPrivate]){candidate.properties.HR_PRIVATE_SHEET_ID=oldPrivate;candidate.books[oldPrivate]=structuredClone(current.books[oldPrivate]);}
+ if(oldPrivate&&current.books[oldPrivate]){candidate.properties.HR_PRIVATE_SHEET_ID=oldPrivate;candidate.books[oldPrivate]=structuredClone(current.books[oldPrivate]);if(bundle.replaceWebTestData===true&&!bundle.privateSheets){const bank=candidate.books[oldPrivate].BankProfiles;if(bank?.length)candidate.books[oldPrivate].BankProfiles=[bank[0]];}}
  if(bundle.privateSheets){
   const privateId=candidate.properties.HR_PRIVATE_SHEET_ID;
   for(const name of ['BankProfiles','PersonnelAudit']){
@@ -54,7 +54,7 @@ export function prepareMigration(bundle,current){
    const expected=candidate.books[privateId][name]?.[0],headers=matrix[0];if(!expected||new Set(headers).size!==headers.length||expected.some(k=>!headers.includes(k)))throw Error('Tiêu đề hồ sơ riêng không khớp '+name);
    const combined=[...expected,...headers.filter(k=>!expected.includes(k))];candidate.books[privateId][name]=[combined,...matrix.slice(1).map(r=>combined.map(k=>r[headers.indexOf(k)]??''))];counts['private/'+name]=matrix.length-1;
   }
- }else issues.push({table:'BankProfiles',message:'Bản xuất chính không có hồ sơ riêng; giữ hồ sơ hiện có của web. Cần bổ sung bản xuất hồ sơ cũ nếu có.'});
+ }else issues.push({table:'BankProfiles',message:bundle.replaceWebTestData===true?'Bản xuất không có hồ sơ ngân hàng riêng. Không mang hồ sơ ngân hàng test sang; thông tin ngân hàng trên từng bill được giữ.':'Bản xuất chính không có hồ sơ riêng; giữ hồ sơ hiện có của web. Cần bổ sung bản xuất hồ sơ cũ nếu có.'});
  if(current.webFinance)candidate.webFinance=structuredClone(current.webFinance);
  // Deliberately keep live web admin office settings, not stale exported GPS.
  const gpsKeys=['hr_telegram_id','accountant_telegram_id','office_name','office_lat','office_lng','radius_m','start_time','end_time','lunch_start','lunch_end'];
@@ -65,7 +65,7 @@ export function prepareMigration(bundle,current){
  const result={kind:'viral-migration',source:{name:bundle.fileName,sha256:bundle.sourceSHA256},counts,issues,repairs,previews,candidate,files:[...manifest.values()],folderId:bundle.driveFolderId||'',originalWorkbook:bundle,status:'prepared',preparedAt:new Date().toISOString()};
  candidate.migrationMeta={source:result.source,counts,issues,repairs,preparedAt:result.preparedAt};return result;
 }
-export function migrationPublic(stage){const d=stage.data;return {id:stage.id,version:stage.version,status:d.status,source:d.source,counts:d.counts,issues:d.issues,repairs:d.repairs,previews:d.previews,files:d.files,folderId:d.folderId,employees:rows(d.candidate.books.main.Employees).map(p=>({id:id(p.telegram_id),name:p.name,role:p.role,active:str(p.active).toLowerCase()==='true'})),ready:d.files.every(f=>f.status==='copied')&&!d.issues.some(x=>x.blocking)};}
+export function migrationPublic(stage){const d=stage.data;return {id:stage.id,version:stage.version,status:d.status,source:d.source,counts:d.counts,issues:d.issues,repairs:d.repairs,previews:d.previews,files:d.files,folderId:d.folderId,preserveWebStaff:d.candidate.migrationPolicy?.preserveWebStaff===true,employees:rows(d.candidate.books.main.Employees).map(p=>({id:id(p.telegram_id),name:p.name,role:p.role,active:str(p.active).toLowerCase()==='true'})),ready:d.files.every(f=>f.status==='copied')&&!d.issues.some(x=>x.blocking)};}
 export function rewriteBillURLs(data,fileId,baseURL=''){
  const url=baseURL+'/api/viral/file?id='+encodeURIComponent(fileId),expenses=data.books.main.Expenses,h=expenses[0];
  for(const r of expenses.slice(1))for(const [k,u] of [['bill_file_id','bill_url'],['payment_file_id','payment_url']])if(id(r[h.indexOf(k)])===fileId)r[h.indexOf(u)]=url;
