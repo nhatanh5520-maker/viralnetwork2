@@ -28,3 +28,16 @@ test('SQL only publishes the metadata table; authenticated access is guarded and
  const sql=fs.readFileSync('../supabase/viral-realtime.sql','utf8');assert.match(sql,/add table public\.viral_change_signal/);assert.doesNotMatch(sql,/add table public\.viral_state/);assert.match(sql,/m\.auth_user_id=\(select auth\.uid\(\)\) and m\.active/);assert.match(sql,/revoke all on public\.viral_change_signal from public,anon,authenticated/);assert.match(sql,/grant select on public\.viral_change_signal to authenticated/);assert.doesNotMatch(sql,/grant (?:all|insert|update).*to authenticated/);assert.match(sql,/where id='main'/);
  const route=fs.readFileSync('src/app/api/viral/changes/route.ts','utf8');assert.doesNotMatch(route,/SERVICE_ROLE_KEY/);assert.match(route,/private, no-store/);assert.doesNotMatch(route,/loadViral\(/);
 });
+test('local save refreshes without a realtime event; does not refresh while saving; metadata signal does not blank the loaded screen',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();await x.flush();
+ w.eval('busy=true;');x.listeners.signal({new:{versions:{people:2}}});
+ assert.equal(w.eval('productionReady'),true,'an incoming signal must not invalidate the displayed screen while saving');
+ w.dispatchEvent(new w.CustomEvent('viral:saved',{detail:{scopes:['production','work']}}));
+ await x.flush();assert.equal(w.eval('refreshCount'),0);
+ w.eval('busy=false;');await x.flush();assert.equal(w.eval('refreshCount'),1);assert.equal(w.document.getElementById('liveDataUpdate'),null);
+ // A later local save must work even with no new server signal revision.
+ w.dispatchEvent(new w.CustomEvent('viral:saved',{detail:{scopes:['production']}}));await x.flush();assert.equal(w.eval('refreshCount'),2);
+ assert.deepEqual(Array.from(w.ViralMutationScopes('saveProductionAsset')),['production','work']);assert.equal(w.ViralMutationScopes('productionPage').length,0);
+ }finally{x.dom.window.close();}
+});
+test('local invalidation received during a read remains pending',()=>{const t=new ChangeTracker();t.invalidate(['production']);const first=t.relevant('production');t.invalidate(['production']);t.complete(first);assert.equal(t.relevant('production').size,1);});

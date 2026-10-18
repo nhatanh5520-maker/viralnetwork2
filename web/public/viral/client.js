@@ -17,7 +17,7 @@ const readMethods=new Set(['snapshotHome','snapshotCore','snapshotManager','prod
 function call(method,...args){if(!readMethods.has(method))return callTransport(method,...args);const key=JSON.stringify([method,...args]);if(pendingReadCalls.has(key))return pendingReadCalls.get(key);const request=callTransport(method,...args).finally(()=>{if(pendingReadCalls.get(key)===request)pendingReadCalls.delete(key)});pendingReadCalls.set(key,request);return request;}
 async function callTransport(method,...args){
  const response=await fetch('/api/viral/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method,args,initData:tg?.initData||''}),credentials:'same-origin'});
- const body=await response.json();if(!response.ok)throw Error(body.error||'Không kết nối được máy chủ');return body.result;
+ const body=await response.json();if(!response.ok)throw Error(body.error||'Không kết nối được máy chủ');const scopes=window.ViralMutationScopes?.(method)||[];if(scopes.length&&body.result?.ok!==false)window.dispatchEvent(new CustomEvent('viral:saved',{detail:{scopes}}));return body.result;
 }
 function fmt(iso){if(!iso)return '—';const d=new Date(iso);return isNaN(d)?esc(iso):d.toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'})}
 function num(x){return Number(x||0)}
@@ -274,7 +274,7 @@ function startApp(){if(!init){msg('Hãy mở Mini App bằng nút trong Telegram
 function screenInteractionActive(){
  if(typeof compactPeoplePickerOpen!=='undefined'&&compactPeoplePickerOpen)return true;
  const screen=$('screen'),active=document.activeElement;
- return !!(formDirty||screen?.querySelector?.('details[open]')||(active&&screen?.contains?.(active)&&active.matches?.('input,textarea,select,[contenteditable="true"]')));
+ return !!(formDirty||(active&&screen?.contains?.(active)&&active.matches?.('input,textarea,select,[contenteditable="true"]')));
 }
 async function refreshSnapshot(manual=false){
  if(!state||busy||refreshing||document.hidden||['performance','fieldReview','fieldReport'].includes(tab)||!manual&&screenInteractionActive())return;
@@ -288,8 +288,8 @@ async function refreshSnapshot(manual=false){
   }
   if(tab==='tasks')try{queue=await call('reviewQueue',currentReviewScope())}catch(e){if(manual)refreshError+=(refreshError?'\n':'')+'Danh sách chờ duyệt: '+(e.message||String(e))}
   state={...state,...fresh,...extra,...(Array.isArray(queue)?{reviewQueue:queue}:{})};lastRefresh=Date.now();if(tab!=='home')coreReady=true;
-  if(manual||!screenInteractionActive())render();
-  if(manual)msg(refreshError||'Đã cập nhật dữ liệu',!!refreshError);return true;
+  const redraw=manual||!screenInteractionActive();if(redraw)render();
+  if(manual)msg(refreshError||'Đã cập nhật dữ liệu',!!refreshError);return redraw;
  }catch(e){if(manual)msg('Không làm mới được: '+(e.message||String(e)),true);return false;}
  finally{refreshing=false;if(button)button.disabled=false}
 }
@@ -300,7 +300,7 @@ async function loadProductionPage(page=0,append=false,force=false,background=fal
  const request=++productionRequest,filters={page,project:window._v18Project||'',metric:window._productionMetric||'all',q:window._productionSearch||'',status:window._v19Filter||'all',day:window._v19Day||'',from:window._productionFrom||'',to:window._productionTo||'',dateType:window._v19DateType||'all',approvalKey:window._v19ApprovalKey||'',approvalStatus:window._v19ApprovalStatus||'',includeStats:true};
  const key=JSON.stringify({...filters,includeStats:undefined}),cached=!force&&!append?productionPageCache.get(key):null;
  if(cached&&Date.now()-cached.at<20000){state.productionPage=cached.data;lastProductionRefresh=cached.at;render();return true}
- try{let result=await call(productionReady?'productionPage':'productionScreen',filters);if(request!==productionRequest||tab!=='production')return false;if(result?.productionPage){Object.assign(state,{user:result.user||state.user,projects:result.projects,projectRecords:result.projectRecords||state.projectRecords,projectAvatars:result.projectAvatars||state.projectAvatars,personalAvatars:result.personalAvatars||state.personalAvatars,peopleNames:result.peopleNames,productionPeople:result.productionPeople});productionReady=true;result=result.productionPage;}if(!result?.ok||!Array.isArray(result.items))throw Error('Không tải được trang sản xuất');state.productionPage={...result,stats:filters.includeStats?result.stats:state.productionPage?.stats||{},_project:filters.project,items:append?[...(state.productionPage?.items||[]),...result.items.filter(x=>!(state.productionPage?.items||[]).some(y=>String(y.id)===String(x.id)))]:result.items};if(!append){productionPageCache.set(key,{at:Date.now(),data:state.productionPage});if(productionPageCache.size>12)productionPageCache.delete(productionPageCache.keys().next().value)}lastProductionRefresh=Date.now();if(background?!screenInteractionActive():(!formDirty||append))render();return true}
+ try{let result=await call(productionReady?'productionPage':'productionScreen',filters);if(request!==productionRequest||tab!=='production')return false;if(result?.productionPage){Object.assign(state,{user:result.user||state.user,projects:result.projects,projectRecords:result.projectRecords||state.projectRecords,projectAvatars:result.projectAvatars||state.projectAvatars,personalAvatars:result.personalAvatars||state.personalAvatars,peopleNames:result.peopleNames,productionPeople:result.productionPeople});productionReady=true;result=result.productionPage;}if(!result?.ok||!Array.isArray(result.items))throw Error('Không tải được trang sản xuất');state.productionPage={...result,stats:filters.includeStats?result.stats:state.productionPage?.stats||{},_project:filters.project,items:append?[...(state.productionPage?.items||[]),...result.items.filter(x=>!(state.productionPage?.items||[]).some(y=>String(y.id)===String(x.id)))]:result.items};if(!append){productionPageCache.set(key,{at:Date.now(),data:state.productionPage});if(productionPageCache.size>12)productionPageCache.delete(productionPageCache.keys().next().value)}lastProductionRefresh=Date.now();const redraw=background?!screenInteractionActive():(!formDirty||append);if(redraw)render();return redraw}
  catch(e){if(request===productionRequest){window._v18Project=state.productionPage?._project||'';if(!background||!screenInteractionActive())render();msg('Sản xuất: '+(e.message||String(e)),true)}return false}
 }
 async function refreshProduction(){if(!state||busy||approvalPending||approvalFocus||refreshing||document.hidden||tab!=='production'||screenInteractionActive())return;refreshing=true;try{await loadProductionPage(0,false,true,true)}finally{refreshing=false}}
