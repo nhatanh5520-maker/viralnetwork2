@@ -1,5 +1,6 @@
 import {NextResponse} from 'next/server';
 import {invokeViral,sameOrigin,webMember} from '@/lib/viral';
+import {ViralVersionConflict} from '../../../../../server/viral/approval-retry.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 export async function POST(req:Request){
  try{sameOrigin(req);const raw=await req.text();if(Buffer.byteLength(raw)>12*1024*1024)return NextResponse.json({error:'Tệp quá lớn, chọn ảnh nhỏ hơn.'},{status:413});const body=JSON.parse(raw);
@@ -7,5 +8,5 @@ export async function POST(req:Request){
  const initData=String(body.initData||'');const user=initData?null:await webMember();
  if(!user&&!initData)return NextResponse.json({error:'Cần đăng nhập.'},{status:401});
  const result=await invokeViral(body.method,body.args,initData||'supabase',user);return NextResponse.json({result});
- }catch(e){const error=e instanceof Error?e.message:'Không xử lý được yêu cầu';return NextResponse.json({error},{status:error.includes('người khác')?409:400});}
+ }catch(e){const error=e instanceof Error?e.message:'Không xử lý được yêu cầu';return NextResponse.json({error},{status:e instanceof ViralVersionConflict||error.includes('người khác')?409:400});}
 }

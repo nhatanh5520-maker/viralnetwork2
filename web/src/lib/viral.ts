@@ -4,6 +4,7 @@ import {createClient} from '@/lib/supabase/server';
 import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
+import {withIdeaApprovalRetry,ViralVersionConflict} from '../../server/viral/approval-retry.mjs';
 export function viralService(){
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SERVICE_ROLE_KEY;
  if(!url||!key)throw Error('Chưa cấu hình Supabase cho Viral Network.');
@@ -30,6 +31,9 @@ export const makeEvents=(data:any)=>{
  return events;
 };
 export async function invokeViral(method:string,args:any[],initData:string,user:any){
+ return withIdeaApprovalRetry(method,()=>invokeViralAttempt(method,args,initData,user));
+}
+async function invokeViralAttempt(method:string,args:any[],initData:string,user:any){
  if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web đang tạm dừng để chuyển dữ liệu. Mini App cũ vẫn dùng bình thường.');
  const {svc,data,version}=await loadViral();
  let rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
@@ -72,7 +76,7 @@ export async function invokeViral(method:string,args:any[],initData:string,user:
  for(const file of Object.values(data.files||{}) as any[])delete file.bytes;
  if(JSON.stringify(rt.data)!==JSON.stringify(data)){
   const {data:saved,error}=await svc.rpc('viral_commit',{expected_version:version,new_data:rt.data,events:makeEvents(rt.data)});
-  if(error||!saved){if(rt.uploads.length)await svc.storage.from('viral-files').remove(rt.uploads.map((f:any)=>f.id));if(error)throw error;throw Error('Dữ liệu vừa được người khác cập nhật. Làm mới rồi thử lại.');}
+  if(error||!saved){if(rt.uploads.length)await svc.storage.from('viral-files').remove(rt.uploads.map((f:any)=>f.id));if(error)throw error;if(saved===false)throw new ViralVersionConflict();throw Error('Chưa xác nhận được kết quả lưu. Làm mới để kiểm tra trước khi thử lại.');}
  }
  return result;
 }
