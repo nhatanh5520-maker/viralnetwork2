@@ -3,7 +3,14 @@
  const tracker=new ViralChangeTracker();let client,channel,started=false,connecting=false,connected=false,checking=false,applying=false,flushTimer=null,renewTimer=null,lastCheck=0,lastLegacyRefresh=0,ready=null,stopped=false,failures=0,needsProductionCore=false;
  function status(value){document.body.dataset.liveData=value;}
  function canRefresh(){return !!state&&!document.hidden&&!busy&&!refreshing&&!approvalPending&&!approvalFocus&&!window._operationalTarget&&!screenInteractionActive();}
- function banner(){const pending=tracker.relevant(tab).size;let box=$('liveDataUpdate');if(!pending){box?.remove();return;}if(!box){box=document.createElement('div');box.id='liveDataUpdate';box.className='live-data-update';box.setAttribute('role','status');box.innerHTML='<span>Có dữ liệu mới</span><button type="button" class="secondary compact">Cập nhật</button>';$('screen')?.before(box);box.querySelector('button').onclick=()=>{if(busy||refreshing||approvalPending)return;if(approvalFocus||window._operationalTarget){msg('Bạn đang mở một công việc. Hoàn tất hoặc quay lại danh sách để cập nhật.');return;}if(formDirty&&!confirm('Bạn có nội dung chưa lưu. Cập nhật sẽ bỏ phần đang nhập. Tiếp tục?'))return;formDirty=false;document.activeElement?.blur?.();flush(true);};}}
+ function banner(){
+  const pending=tracker.relevant(tab).size;let box=$('liveDataUpdate');
+  // Normal signal delivery refreshes silently, including the first signal after login.
+  if(!pending||!failures&&canRefresh()){box?.remove();return;}
+  if(!box){box=document.createElement('div');box.id='liveDataUpdate';box.className='live-data-update';box.setAttribute('role','status');$('screen')?.before(box);}
+  box.textContent=failures?'Chưa tải được dữ liệu mới. Hệ thống đang tự thử lại.':formDirty?'Dữ liệu sẽ tự cập nhật sau khi bạn lưu hoặc hủy phần đang nhập.':'Dữ liệu sẽ tự cập nhật khi bạn hoàn tất thao tác.';
+ }
+
  function invalidate(scopes){if(!scopes.length)return;if(scopes.some(x=>['projects','people','settings'].includes(x)))needsProductionCore=true;pendingReadCalls.clear();corePromise=null;coreReady=false;managerPromise=null;lastManagerRefresh=0;if(scopes.some(x=>['production','projects','people','settings'].includes(x)))productionPageCache.clear();if(scopes.some(x=>['expenses','people','settings'].includes(x))&&typeof paymentWorkspace!=='undefined'){paymentWorkspace.loaded=false;expenseContentCache.clear();}}
  function ingest(signal){const changed=tracker.accept(signal);invalidate(changed);if(changed.length){banner();queue();}}
  function queue(delay=800){if(flushTimer)return;flushTimer=setTimeout(()=>{flushTimer=null;flush();},delay);}

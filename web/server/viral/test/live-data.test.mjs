@@ -41,3 +41,23 @@ test('local save refreshes without a realtime event; does not refresh while savi
  }finally{x.dom.window.close();}
 });
 test('local invalidation received during a read remains pending',()=>{const t=new ChangeTracker();t.invalidate(['production']);const first=t.relevant('production');t.invalidate(['production']);t.complete(first);assert.equal(t.relevant('production').size,1);});
+
+test('first home signal after login refreshes silently without an update button',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();w.eval("tab='home';");
+ x.listeners.signal({new:{versions:{production:1,attendance:1,people:1}}});
+ assert.equal(w.document.getElementById('liveDataUpdate'),null);
+ await x.flush();assert.equal(w.eval('coreCount'),1);assert.equal(w.document.getElementById('liveDataUpdate'),null);
+ w.eval('interacting=true;formDirty=true;');x.listeners.signal({new:{versions:{production:2}}});await x.flush();
+ const banner=w.document.getElementById('liveDataUpdate');assert.match(banner.textContent,/lưu hoặc hủy/);assert.equal(banner.querySelector('button'),null);
+ w.eval('interacting=false;formDirty=false;');await x.flush();assert.equal(w.eval('coreCount'),2);assert.equal(w.document.getElementById('liveDataUpdate'),null);
+ }finally{x.dom.window.close();}
+});
+test('failed background refresh retries automatically without requiring a click',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();w.eval("tab='home';refreshSnapshot=async function(){coreCount++;return coreCount>1;};");
+ x.listeners.signal({new:{versions:{people:1}}});await x.flush();
+ assert.match(w.document.getElementById('liveDataUpdate').textContent,/tự thử lại/);
+ assert.equal(w.document.querySelector('#liveDataUpdate button'),null);
+ const retry=x.timers.find(t=>t.ms===10000);assert.ok(retry);await retry.fn();await x.tick();
+ assert.equal(w.eval('coreCount'),2);assert.equal(w.document.getElementById('liveDataUpdate'),null);
+ }finally{x.dom.window.close();}
+});
