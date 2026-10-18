@@ -11,7 +11,7 @@ const colNumber=s=>[...s].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
 export function createRuntime(input={},user=null,env={}) {
  const data=structuredClone(input);data.books??={};data.properties??={};data.files??={};data.outbox??=[];
  const cache=new Map();const uploads=[];
- const props={...data.properties,SHEET_ID:'main',BOT_TOKEN:env.BOT_TOKEN||'',WEB_APP_URL:env.WEB_APP_URL||'',BILL_FOLDER_ID:'bills'};
+ const props={...data.properties,SHEET_ID:'main',BOT_TOKEN:env.BOT_TOKEN||'',WEB_APP_URL:env.WEB_APP_URL||'',BILL_FOLDER_ID:'bills',GROUP_GREETINGS_ENABLED:env.GROUP_GREETINGS_ENABLED==='true'?'true':'false'};
  const blob=(bytes,type='application/octet-stream',name='file')=>({getBytes:()=>[...Buffer.from(bytes)],getDataAsString:()=>Buffer.from(bytes).toString('utf8'),getContentType:()=>type,getName:()=>name,setName(n){name=n;return this;}});
  class Range {
   constructor(sheet,row,col,nr=1,nc=1){if(!Number.isInteger(row)||!Number.isInteger(col)||row<1||col<1)throw Error('Vùng dữ liệu không hợp lệ');Object.assign(this,{sheet,row,col,nr,nc});}

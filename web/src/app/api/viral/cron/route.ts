@@ -12,8 +12,8 @@ export async function GET(req:Request){
  const token=process.env.TELEGRAM_BOT_TOKEN;if(!token)return NextResponse.json({error:'Chưa cấu hình bot Telegram'},{status:503});
  const workerDeadline=Date.now()+50000;
  try{
-  // Original scheduler maintains greeting deduplication and work reminders.
-  const state=await loadViral(),rt=createRuntime(state.data,null,{BOT_TOKEN:token,WEB_APP_URL:process.env.VIRAL_WEB_URL});
+  // Group shift/lunch greetings are disabled by default; work reminders remain.
+  const state=await loadViral(),rt=createRuntime(state.data,null,{BOT_TOKEN:token,WEB_APP_URL:process.env.VIRAL_WEB_URL,GROUP_GREETINGS_ENABLED:process.env.VIRAL_GROUP_GREETINGS_ENABLED});
   rt.run('v16Scheduler',[],true);
   const h=rt.data.books.main.Notifications[0],events=rt.data.books.main.Notifications.slice(1).map((r:any)=>Object.fromEntries(h.map((k:string,i:number)=>[k,r[i]]))).filter((r:any)=>['pending','failed'].includes(r.status)).map((r:any)=>({id:'notification:'+r.id,chat_id:String(r.telegram_id),text:String(r.message),photo_file_id:r.photo_file_id||null}));
   events.push(...rt.data.outbox.filter((r:any)=>r.status==='pending').map((r:any)=>({id:r.id,chat_id:r.chatId,text:r.text,photo_file_id:null})));

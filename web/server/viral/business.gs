@@ -631,7 +631,7 @@ function groupGreetingText_(kind){
 function oncePerDay_(key,fn){const p=PropertiesService.getScriptProperties(),d=stamp_(new Date(),'yyyy-MM-dd'),k='V16:'+d+':'+key;if(p.getProperty(k))return;if(fn()!==false)p.setProperty(k,'1');}
 function greetingWindow_(now,scheduled){const a=/^(\d{2}):(\d{2})$/.exec(String(now)),b=/^(\d{2}):(\d{2})$/.exec(String(scheduled));if(!a||!b)return false;const elapsed=(Number(a[1])*60+Number(a[2]))-(Number(b[1])*60+Number(b[2]));return elapsed>=0&&elapsed<15;}
 function v16Scheduler(){
- return botBackgroundJob_('greetings',()=>{readScope_(()=>{const hm=stamp_(new Date(),'HH:mm'),group=String(setting_('group_chat_id')||'').trim();if(!group)return;
+ return botBackgroundJob_('greetings',()=>{readScope_(()=>{if(prop_('GROUP_GREETINGS_ENABLED')==='false')return;const hm=stamp_(new Date(),'HH:mm'),group=String(setting_('group_chat_id')||'').trim();if(!group)return;
  const slots=[['morning','08:00','greet_morning'],['lunch','12:00','greet_lunch'],['afternoon','13:30','greet_afternoon'],['home','17:00','greet_home']];
  for(const [kind,time,key] of slots)if(greetingWindow_(hm,time))try{oncePerDay_(key,()=>tgSend_(group,groupGreetingText_(kind)))}catch(e){console.error('Lời chào '+kind+': '+String(e))}
  });
