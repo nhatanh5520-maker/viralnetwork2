@@ -103,3 +103,15 @@ body.workspace-ready{background:radial-gradient(ellipse at 100% 0,#25402b66,tran
 
 /* Read-only Sheets ledger */
 .finance-filter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:18px 0}.finance-filter-grid label{min-width:0}.finance-table-scroll{overflow-x:auto}.finance-table{border-collapse:collapse;width:100%;font-size:14px}.finance-table th,.finance-table td{padding:12px 10px;border-bottom:1px solid #2a3338;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.finance-table th:first-child,.finance-table td:first-child{text-align:left;white-space:normal;min-width:170px}.finance-table button{white-space:normal;text-align:left}.finance-table th{color:#a4b2bc}@media(max-width:600px){.finance-filter-grid{grid-template-columns:1fr}.finance-table{font-size:13px}}
+
+/* Status stays visible while accountant vouchers are collapsed. */
+.expense-record>summary{cursor:pointer;padding:10px 0;overflow-wrap:anywhere}
+.expense-summary-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.expense-summary-heading>b{flex:1 1 180px;min-width:0}
+.expense-summary-status{flex:0 0 auto;white-space:nowrap}
+.expense-summary-status.status-pending{background:#493b19;color:#ffdc87}
+.expense-summary-status.status-approved{background:#193e4c;color:#a7e5ff}
+.expense-summary-status.status-paid{background:#21442e;color:#c0ef9b}
+.expense-summary-info{display:block;margin:8px 0;color:var(--muted,#9aa7ad)}
+.expense-record>summary .batch-select{display:inline-flex;align-items:center;gap:8px;margin:6px 0;cursor:pointer}
+.expense-record>summary .batch-select input{width:22px;height:22px;margin:0}
