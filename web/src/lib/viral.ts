@@ -4,7 +4,9 @@ import {createClient} from '@/lib/supabase/server';
 import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
-import {withIdeaApprovalRetry,ViralVersionConflict} from '../../server/viral/approval-retry.mjs';
+import {withViralWriteRetry,ViralVersionConflict} from '../../server/viral/approval-retry.mjs';
+import {sharedStateRead,stateReadFailure} from '../../server/viral/state-read.mjs';
+import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
 export function viralService(){
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SERVICE_ROLE_KEY;
  if(!url||!key)throw Error('Chưa cấu hình Supabase cho Viral Network.');
@@ -16,12 +18,18 @@ export async function webMember(){
  const svc=viralService();const {data,error:err}=await svc.from('viral_members').select('employee_id').eq('auth_user_id',user.id).eq('active',true).maybeSingle();
  if(err)throw err;if(!data)return null;return {employeeId:data.employee_id,email:user.email||'',authUserId:user.id};
 }
-export async function loadViral(){
- const svc=viralService();const {data,error}=await svc.from('viral_state').select('data,version').eq('id','main').single();if(error)throw Error('Chưa khởi tạo dữ liệu Viral Network. Chạy scripts/viral-init.mjs trước.');
+async function readFreshViralState(){
+ const svc=viralService();let result;
+ try{result=await svc.from('viral_state').select('data,version').eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();}catch(error){throw stateReadFailure(error);}
+ const {data,error}=result;if(error){const failure=stateReadFailure(error);console.error('viral_state_read',{code:failure.code});throw failure;}
  const rows=data.data.books.main.Notifications||[],h=rows[0]||[],status=h.indexOf('status'),key=h.indexOf('id');
  const ids=rows.slice(1).filter((r:any)=>['pending','failed'].includes(r[status])).map((r:any)=>'notification:'+r[key]);
- for(let i=0;i<ids.length;i+=100){const {data:sent,error:e}=await svc.from('viral_outbox').select('id').in('id',ids.slice(i,i+100)).eq('status','sent');if(e)throw e;const done=new Set((sent||[]).map((m:any)=>m.id));for(const r of rows.slice(1))if(done.has('notification:'+r[key])){r[status]='sent';r[h.indexOf('sent_at')]=new Date().toISOString();}}
- return {svc,data:data.data,version:data.version};
+ for(let i=0;i<ids.length;i+=100){const {data:sent,error:e}=await svc.from('viral_outbox').select('id').in('id',ids.slice(i,i+100)).eq('status','sent').abortSignal(AbortSignal.timeout(8000));if(e)throw stateReadFailure(e);const done=new Set((sent||[]).map((m:any)=>m.id));for(const r of rows.slice(1))if(done.has('notification:'+r[key])){r[status]='sent';r[h.indexOf('sent_at')]=new Date().toISOString();}}
+ return {data:data.data,version:data.version};
+}
+const readSharedViralState=sharedStateRead(readFreshViralState);
+export async function loadViral(options:{share?:boolean}={}){
+ return {svc:viralService(),...await (options.share?readSharedViralState():readFreshViralState())};
 }
 export function sameOrigin(req:Request){const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)throw Error('Nguồn yêu cầu không hợp lệ.');}
 export const makeEvents=(data:any)=>{
@@ -30,12 +38,14 @@ export const makeEvents=(data:any)=>{
  for(const row of cells.slice(1)){const n=Object.fromEntries(h.map((key:string,i:number)=>[key,row[i]]));if(['pending','failed'].includes(n.status)&&n.telegram_id)events.push({id:'notification:'+n.id,chat_id:String(n.telegram_id),text:String(n.message),photo_file_id:n.photo_file_id||null});}
  return events;
 };
+const queuedAttendance=attendanceQueue();
 export async function invokeViral(method:string,args:any[],initData:string,user:any){
- return withIdeaApprovalRetry(method,()=>invokeViralAttempt(method,args,initData,user));
+ return queuedAttendance(method,()=>withViralWriteRetry(method,()=>invokeViralAttempt(method,args,initData,user)));
 }
 async function invokeViralAttempt(method:string,args:any[],initData:string,user:any){
  if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web đang tạm dừng để chuyển dữ liệu. Mini App cũ vẫn dùng bình thường.');
- const {svc,data,version}=await loadViral();
+ const share=['snapshotHome','snapshotCore','snapshotManager','productionPage','productionScreen','attendanceStatus','reviewQueue','staffProductionWorkload'].includes(method);
+ const {svc,data,version}=await loadViral({share});
  let rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
  rt.context.__authInput=initData;
  const vm=await import('node:vm');
