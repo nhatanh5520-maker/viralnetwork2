@@ -61,3 +61,17 @@ test('failed background refresh retries automatically without requiring a click'
  assert.equal(w.eval('coreCount'),2);assert.equal(w.document.getElementById('liveDataUpdate'),null);
  }finally{x.dom.window.close();}
 });
+
+test('realtime resumes after a 401 and a new login, ignoring old session callbacks',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();const oldSignal=x.listeners.signal;
+ const original=w.fetch;w.fetch=async()=>({status:401,ok:false});w.dispatchEvent(new w.Event('online'));await x.tick();assert.equal(w.document.body.dataset.liveData,'signed_out');
+ w.dispatchEvent(new w.Event('viral:session-reset'));w.eval("state={user:{id:'2'},productionPage:{items:[]}};");w.fetch=original;w.eval('render();');await x.tick();
+ assert.notEqual(x.listeners.signal,oldSignal);oldSignal({new:{versions:{production:999}}});await x.flush();assert.equal(w.eval('refreshCount'),0);
+ x.listeners.signal({new:{versions:{production:1}}});await x.flush();assert.equal(w.eval('refreshCount'),1);
+ }finally{x.dom.window.close();}
+});
+test('a signal being refreshed on one tab is not acknowledged for a different tab',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();w.eval("tab='home';var finishRead;refreshSnapshot=()=>new Promise(resolve=>{finishRead=resolve;});");
+ x.listeners.signal({new:{versions:{production:1}}});const timer=x.timers.find(t=>t.ms===800);assert.ok(timer);const running=timer.fn();await x.tick();w.eval("tab='production';finishRead(true);");await running;await x.tick();await x.flush();assert.equal(w.eval('refreshCount'),1);
+ }finally{x.dom.window.close();}
+});

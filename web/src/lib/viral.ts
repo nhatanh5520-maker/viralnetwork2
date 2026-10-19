@@ -4,9 +4,11 @@ import {createClient} from '@/lib/supabase/server';
 import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
-import {withViralWriteRetry,ViralVersionConflict} from '../../server/viral/approval-retry.mjs';
+import {withViralWriteRetry} from '../../server/viral/approval-retry.mjs';
 import {sharedStateRead,stateReadFailure} from '../../server/viral/state-read.mjs';
 import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
+import {commitWithUploads} from '../../server/viral/commit-uploads.mjs';
+import {avatarResolver} from '../../server/viral/avatar-cache.mjs';
 export function viralService(){
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SERVICE_ROLE_KEY;
  if(!url||!key)throw Error('Chưa cấu hình Supabase cho Viral Network.');
@@ -44,7 +46,7 @@ export async function invokeViral(method:string,args:any[],initData:string,user:
 }
 async function invokeViralAttempt(method:string,args:any[],initData:string,user:any){
  if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web đang tạm dừng để chuyển dữ liệu. Mini App cũ vẫn dùng bình thường.');
- const share=['snapshotHome','snapshotCore','snapshotManager','productionPage','productionScreen','attendanceStatus','reviewQueue','staffProductionWorkload'].includes(method);
+ const share=['snapshotHome','snapshotCore','snapshotManager','avatarBatch','accountingExpenses','productionPage','productionScreen','attendanceStatus','reviewQueue','staffProductionWorkload'].includes(method);
  const {svc,data,version}=await loadViral({share});
  let rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
  rt.context.__authInput=initData;
@@ -81,23 +83,38 @@ async function invokeViralAttempt(method:string,args:any[],initData:string,user:
  let result;
  if(method==='avatarBatch')result=await avatars(rt,args[0]);
  else result=rt.run(method,[initData,...args]);
- for(const upload of rt.uploads){const {error}=await svc.storage.from('viral-files').upload(upload.id,upload.bytes,{contentType:upload.type,upsert:false});if(error)throw Error('Không lưu được tệp đính kèm');}
  for(const file of Object.values(rt.data.files||{}) as any[])delete file.bytes;
  for(const file of Object.values(data.files||{}) as any[])delete file.bytes;
  if(JSON.stringify(rt.data)!==JSON.stringify(data)){
-  const {data:saved,error}=await svc.rpc('viral_commit',{expected_version:version,new_data:rt.data,events:makeEvents(rt.data)});
-  if(error||!saved){if(rt.uploads.length)await svc.storage.from('viral-files').remove(rt.uploads.map((f:any)=>f.id));if(error)throw error;if(saved===false)throw new ViralVersionConflict();throw Error('Chưa xác nhận được kết quả lưu. Làm mới để kiểm tra trước khi thử lại.');}
+  await commitWithUploads({uploads:rt.uploads,
+   upload:(file:any)=>svc.storage.from('viral-files').upload(file.id,file.bytes,{contentType:file.type,upsert:false}),
+   remove:async(ids:string[])=>{const {error}=await svc.storage.from('viral-files').remove(ids);if(error)throw error;},
+   commit:()=>svc.rpc('viral_commit',{expected_version:version,new_data:rt.data,events:makeEvents(rt.data)})
+  });
+  readSharedViralState.invalidate();
  }
  return result;
 }
+const resolveAvatarPhotos=avatarResolver();
 async function avatars(rt:any,ids:any){
  if(!Array.isArray(ids)||ids.length>8)throw Error('Danh sách ảnh đại diện không hợp lệ.');
- const token=process.env.TELEGRAM_BOT_TOKEN;
- const employees=rt.data.books.main.Employees||[];const allowed=new Set(employees.slice(1).map((r:any)=>String(r[0])));const out:Record<string,string>={};
- for(const id of [...new Set(ids.map(String))]){if(!allowed.has(id)||!/^\d+$/.test(id))continue;const a=rt.data.books.main.UserAvatars||[],h=a[0]||[],custom=a.slice(1).find((r:any)=>String(r[h.indexOf('telegram_id')])===id);if(custom){out[id]=custom[h.indexOf('mode')]==='custom'&&custom[h.indexOf('file_id')]?'/api/viral/avatar?id='+encodeURIComponent(String(custom[h.indexOf('file_id')])):'';continue;}if(!token)continue;try{
-  const photo=await fetch(`https://api.telegram.org/bot${token}/getUserProfilePhotos`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:id,limit:1})}).then(r=>r.json());
-  const fid=photo.result?.photos?.[0]?.[0]?.file_id;if(!fid)continue;
-  const file=await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fid)}`).then(r=>r.json());if(!file.result?.file_path)continue;
-  const image=await fetch(`https://api.telegram.org/file/bot${token}/${file.result.file_path}`);if(image.ok)out[id]=`data:image/jpeg;base64,${Buffer.from(await image.arrayBuffer()).toString('base64')}`;
- }catch{ /* A missing avatar must not block application use. */ }}return out;
+ const token=process.env.TELEGRAM_BOT_TOKEN,employees=rt.data.books.main.Employees||[],headers=employees[0]||[],idCol=headers.indexOf('telegram_id'),activeCol=headers.indexOf('active');
+ const allowed=new Set(employees.slice(1).filter((r:any)=>String(r[activeCol]).toLowerCase()==='true').map((r:any)=>String(r[idCol]))),out:Record<string,string>={},requested:string[]=[];
+ for(const id of [...new Set(ids.map(String))] as string[]){
+  if(!allowed.has(id)||!/^\d+$/.test(id))continue;
+  const a=rt.data.books.main.UserAvatars||[],h=a[0]||[],custom=a.slice(1).find((r:any)=>String(r[h.indexOf('telegram_id')])===id);
+  if(custom){out[id]=custom[h.indexOf('mode')]==='custom'&&custom[h.indexOf('file_id')]?'/api/viral/avatar?id='+encodeURIComponent(String(custom[h.indexOf('file_id')])):'';continue;}
+  if(token)requested.push(id);
+ }
+ if(!token||!requested.length)return out;
+ const photos=await resolveAvatarPhotos(requested,async(id:string,deadline:number)=>{
+  const request=async(url:string,init:RequestInit={})=>{const left=deadline-Date.now();if(left<=0)throw Error('Avatar deadline');return fetch(url,{...init,signal:AbortSignal.timeout(Math.min(2500,left))});};
+  const photo=await request(`https://api.telegram.org/bot${token}/getUserProfilePhotos`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:id,limit:1})}).then(r=>r.json());
+  if(!photo.ok)return undefined;const fid=photo.result?.photos?.[0]?.[0]?.file_id;if(!fid)return '';
+  const file=await request(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fid)}`).then(r=>r.json());if(!file.ok||!file.result?.file_path)return undefined;
+  const response=await request(`https://api.telegram.org/file/bot${token}/${file.result.file_path}`);if(!response.ok)return undefined;
+  const bytes=Buffer.from(await response.arrayBuffer());if(bytes.length>256*1024)return undefined;
+  return `data:image/jpeg;base64,${bytes.toString('base64')}`;
+ },{scope:token});
+ return {...out,...photos};
 }

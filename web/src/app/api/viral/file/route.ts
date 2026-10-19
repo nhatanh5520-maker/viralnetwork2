@@ -3,7 +3,7 @@ export const runtime='nodejs';
 export async function GET(req:Request){try{
  const member=await webMember();if(!member)return new Response('Cần đăng nhập',{status:401});
  const id=new URL(req.url).searchParams.get('id');if(!id)return new Response('Thiếu tệp',{status:400});
- const {svc,data}=await loadViral(),rt=createRuntime(data,member);const actor=vm.runInContext("auth_('supabase')",rt.context);
+ const {svc,data}=await loadViral({share:true}),rt=createRuntime(data,member);const actor=vm.runInContext("auth_('supabase')",rt.context);
  const rows=data.books.main.Expenses,h=rows[0],extra=data.books.main.ExpenseAttachments||[];
  const expense=rows.slice(1).map((r:any)=>Object.fromEntries(h.map((k:string,i:number)=>[k,r[i]]))).find((r:any)=>String(r.bill_file_id)===id||String(r.payment_file_id)===id||extra.slice(1).some((a:any)=>String(a[0])===String(r.id)&&String(a[2])===id));
  if(!expense)return new Response('Không thấy tệp',{status:404});

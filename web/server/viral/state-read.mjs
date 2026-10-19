@@ -13,8 +13,9 @@ export function stateReadFailure(error){
 // Each caller receives its own copy, so one employee cannot mutate another read.
 export function sharedStateRead(read){
  let pending=null;
- return async function(){
+ const load=async function(){
   if(!pending){const operation=Promise.resolve().then(read);pending=operation;operation.then(()=>{if(pending===operation)pending=null;},()=>{if(pending===operation)pending=null;});}
   return structuredClone(await pending);
  };
+ load.invalidate=()=>{pending=null;};return load;
 }

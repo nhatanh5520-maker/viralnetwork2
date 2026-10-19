@@ -1,5 +1,6 @@
 import {NextResponse} from 'next/server';import crypto from 'node:crypto';
 import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor,employeeAccountData,manualAccountInput} from '../../../../../../server/viral/hr-accounts.mjs';
+import {unfinishedAccount} from '../../../../../../server/viral/account-cleanup.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 const reply=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'no-store'}});
 async function sendQueuedWelcome(svc:any,eventId:string,telegramId:string,welcome:string,token:string){
@@ -7,7 +8,7 @@ async function sendQueuedWelcome(svc:any,eventId:string,telegramId:string,welcom
  if(error||!claim?.length)return false;
  try{const result=await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:telegramId,text:welcome,link_preview_options:{is_disabled:true}}),signal:AbortSignal.timeout(10000)}).then(r=>r.json());if(!result.ok)throw Error('Telegram chưa nhận tin.');const {error:e}=await svc.from('viral_outbox').update({status:'sent',lease_until:null,last_error:null}).eq('id',eventId);return !e;}catch{await svc.from('viral_outbox').update({status:'pending',lease_until:null}).eq('id',eventId).eq('status','sending');return false;}
 }
-export async function POST(req:Request){let createdId:string|null=null,svc:any=null,committed=false;try{
+export async function POST(req:Request){let createdId:string|null=null,svc:any=null,committed=false,commitAttempted=false,commitRejected=false;try{
  sameOrigin(req);if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web tạm dừng để chuyển dữ liệu.');const raw=await req.text();if(Buffer.byteLength(raw)>30000)throw Error('Yêu cầu quá lớn.');const body=JSON.parse(raw),initData=String(body.initData||''),user=initData?null:await webMember();
  if(!user&&!initData)return reply({error:'Cần đăng nhập.'},401);
  const state=await loadViral();svc=state.svc;const actor=hrAccountActor(state.data,user,initData,process.env.TELEGRAM_BOT_TOKEN);
@@ -35,7 +36,7 @@ export async function POST(req:Request){let createdId:string|null=null,svc:any=n
     const prepared=employeeAccountData(state.data,actor,{email:target.email,telegram_id:target.telegramId,name:target.employee.name,department:target.employee.department,job_title:target.employee.job_title||'Nhân viên',employee_code:target.employee.employee_code});
     const {data:auth,error:ae}=await svc.auth.admin.createUser({email:target.email,password:target.password,email_confirm:true});if(ae||!auth.user)throw Error('Không tạo được đăng nhập. Email có thể đã được sử dụng hoặc mật khẩu không đạt chính sách.');authId=String(auth.user.id);createdId=authId;
     const base=process.env.VIRAL_WEB_URL||new URL(req.url).origin,welcome='👋 '+target.employee.name+' đã được HR cấp đăng nhập Viral Network.\nEmail: '+target.email+'\nMở web: '+base+'\nMật khẩu được HR bàn giao riêng. Thông báo công việc vẫn gửi vào Telegram này.';
-    const {data:saved,error:ce}=await svc.rpc('viral_hr_create_account',{expected_version:state.version,new_data:prepared.data,auth_user:authId,employee:target.telegramId,welcome});if(ce||!saved)throw Error('Dữ liệu vừa thay đổi hoặc chưa cài hàm HR. Kiểm tra SQL và thử lại.');committed=true;loginSaved=true;
+    commitAttempted=true;const {data:saved,error:ce}=await svc.rpc('viral_hr_create_account',{expected_version:state.version,new_data:prepared.data,auth_user:authId,employee:target.telegramId,welcome});if(!ce&&saved===false)commitRejected=true;if(ce||!saved)throw Error('Dữ liệu vừa thay đổi hoặc chưa cài hàm HR. Kiểm tra SQL và thử lại.');committed=true;loginSaved=true;
    }
    const {error:logError}=await svc.from('viral_account_audit').update({status:'done',auth_user_id:authId}).eq('id',auditId);
    let eventId=member?'':'account-welcome:'+authId;
@@ -67,13 +68,16 @@ export async function POST(req:Request){let createdId:string|null=null,svc:any=n
  const {data:link,error:le}=await svc.auth.admin.generateLink({type:'recovery',email:prepared.email});if(le||!link.properties?.hashed_token)throw Error('Không tạo được đường dẫn đặt mật khẩu.');
  const url=base.replace(/\/$/,'')+'/auth/set-password#token_hash='+encodeURIComponent(link.properties.hashed_token);
  const welcome='👋 Chào '+prepared.name+'!\nHR đã cấp tài khoản Viral Network.\nEmail đăng nhập: '+prepared.email+'\nĐặt mật khẩu của bạn: '+url+'\nSau đó mở web: '+base+'\nLink chỉ dùng một lần; không chia sẻ cho người khác. Nếu hết hạn, liên hệ HR.\nThông báo công việc vẫn nhận tại Telegram này.';
- const {data:saved,error:ce}=await svc.rpc('viral_hr_create_account',{expected_version:state.version,new_data:prepared.data,auth_user:createdId,employee:prepared.telegramId,welcome});if(ce||!saved)throw Error('Chưa lưu được tài khoản. Chạy viral-hr-accounts.sql; nếu dữ liệu thay đổi hãy thử lại.');committed=true;
+ commitAttempted=true;const {data:saved,error:ce}=await svc.rpc('viral_hr_create_account',{expected_version:state.version,new_data:prepared.data,auth_user:createdId,employee:prepared.telegramId,welcome});if(!ce&&saved===false)commitRejected=true;if(ce||!saved)throw Error('Chưa lưu được tài khoản. Chạy viral-hr-accounts.sql; nếu dữ liệu thay đổi hãy thử lại.');committed=true;
  // Try immediately; durable outbox retains retries for the minute scheduler.
  const sent=await sendQueuedWelcome(svc,'account-welcome:'+createdId,prepared.telegramId,welcome,token);
  return reply({ok:true,employee:prepared.telegramId,telegramSent:sent,message:sent?'Đã tạo tài khoản và gửi hướng dẫn đặt mật khẩu qua Telegram.':'Đã tạo tài khoản. Tin Telegram đang chờ gửi; kiểm tra bot và bộ gửi mỗi phút.'});
  }catch(e){if(createdId&&svc&&!committed){
- const {data:membership,error:lookup}=await svc.from('viral_members').select('auth_user_id').eq('auth_user_id',createdId).maybeSingle();
- if(membership)return reply({ok:true,message:'Tài khoản đã được lưu. Kiểm tra tin Telegram; nếu chưa nhận, HR dùng Gửi lại link đặt mật khẩu.'});
- if(lookup)return reply({error:'Chưa xác nhận được trạng thái tài khoản. Quản trị cần kiểm tra Supabase trước khi tạo lại.'},409);
- const {error}=await svc.auth.admin.deleteUser(createdId);if(error)return reply({error:'Cấp tài khoản chưa hoàn tất; cần quản trị kiểm tra email mới trong Supabase Auth trước khi thử lại.'},409);
+ const outcome=await unfinishedAccount({
+  lookup:()=>svc.from('viral_members').select('auth_user_id').eq('auth_user_id',createdId).maybeSingle(),
+  remove:()=>svc.auth.admin.deleteUser(createdId),mayHaveCommitted:commitAttempted&&!commitRejected
+ });
+ if(outcome==='linked')return reply({ok:true,message:'Tài khoản đã được lưu. Kiểm tra tin Telegram; nếu chưa nhận, HR dùng Gửi lại link đặt mật khẩu.'});
+ if(outcome==='uncertain')return reply({error:'Chưa xác nhận được trạng thái tài khoản; giữ đăng nhập để đối chiếu. Quản trị cần kiểm tra Supabase trước khi tạo lại.'},409);
+ if(outcome==='cleanup_failed')return reply({error:'Cấp tài khoản chưa hoàn tất; cần quản trị kiểm tra email mới trong Supabase Auth trước khi thử lại.'},409);
  }return reply({error:e instanceof Error?e.message:'Không tạo được tài khoản.'},400);}}

@@ -8,8 +8,8 @@ import {commitSchedulerState} from '../../../../../server/viral/scheduler-commit
 export const runtime='nodejs';export const maxDuration=60;
 export async function GET(req:Request){
  if(process.env.VIRAL_MAINTENANCE==='true')return NextResponse.json({error:'Tạm dừng để chuyển dữ liệu.'},{status:503});
- const secret=process.env.CRON_SECRET,provided=req.headers.get('authorization')||'';
- if(!secret||provided.length!==(`Bearer ${secret}`).length||!crypto.timingSafeEqual(Buffer.from(provided),Buffer.from(`Bearer ${secret}`)))return NextResponse.json({error:'Không được phép'},{status:401});
+ const secret=process.env.CRON_SECRET,provided=Buffer.from(req.headers.get('authorization')||''),expected=Buffer.from(`Bearer ${secret||''}`);
+ if(!secret||provided.length!==expected.length||!crypto.timingSafeEqual(provided,expected))return NextResponse.json({error:'Không được phép'},{status:401});
  const token=process.env.TELEGRAM_BOT_TOKEN;if(!token)return NextResponse.json({error:'Chưa cấu hình bot Telegram'},{status:503});
  const began=Date.now(),workerDeadline=began+50000;let phase='load_state';
  try{

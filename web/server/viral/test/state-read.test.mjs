@@ -21,3 +21,8 @@ test('new reminders commit atomically and version rejection does not overwrite n
  let calls=0;for(const saved of [true,false]){const result=await commitSchedulerState({outbox:[]},{outbox:[{id:'event'}]},async()=>{calls++;return {data:saved};});assert.equal(result.committed,saved);assert.equal(result.changed,true);}assert.equal(calls,2);
  await assert.rejects(commitSchedulerState({a:1},{a:2},async()=>({error:Error('db error')})),/db error/);
 });
+
+test('a successful write can invalidate an older in-flight read for subsequent callers',async()=>{
+ let calls=0,release;const read=sharedStateRead(async()=>{calls++;if(calls===1){await new Promise(r=>release=r);return {version:1};}return {version:2};});
+ const old=read();await Promise.resolve();read.invalidate();assert.equal((await read()).version,2);release();assert.equal((await old).version,1);assert.equal(calls,2);
+});

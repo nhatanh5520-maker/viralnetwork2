@@ -6,7 +6,7 @@ export async function withViralWriteRetry(method,operation){
  for(let attempt=0;attempt<3;attempt++){
   try{return await operation();}
   catch(error){
-   if(!['decideProductionApproval','attendance','fieldAttendance'].includes(method)||!(error instanceof ViralVersionConflict)||attempt===2)throw error;
+   if(!['decideProductionApproval','submitAppProductionApproval','attendance','fieldAttendance'].includes(method)||!(error instanceof ViralVersionConflict)||attempt===2)throw error;
   }
  }
 }

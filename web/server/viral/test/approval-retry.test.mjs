@@ -34,3 +34,11 @@ test('network, database and business errors are never automatically retried',asy
 test('retry is bounded and does not broaden to other mutations',async()=>{
  for(const [method,expected] of [['decideProductionApproval',3],['createProductionItem',1]]){let calls=0;await assert.rejects(withIdeaApprovalRetry(method,async()=>{calls++;throw new ViralVersionConflict();}),ViralVersionConflict);assert.equal(calls,expected);}
 });
+
+test('the actual UI approval method retries the same signed snapshot after an unrelated CAS rejection',async()=>{
+ let current=fixture(),calls=0;const table=current.books.main.ProductionItems,h=table[0],item=Object.fromEntries(h.map((k,i)=>[k,table[1][i]]));
+ const data={id:item.id,kind:'idea',decision:'Duyệt',note:'',snapshot:item,prior_reviewed_at:'',request_id:'app_review_request_123456'};
+ const once=createRuntime(current,{employeeId:'1001'});once.run('submitAppProductionApproval',['supabase',data]);
+ const result=await withIdeaApprovalRetry('submitAppProductionApproval',async()=>{calls++;const rt=createRuntime(current,{employeeId:'1001'}),result=rt.run('submitAppProductionApproval',['supabase',data]);if(calls===1){current.schedulerMarker='preserve newer scheduler';throw new ViralVersionConflict();}current=rt.data;return result;});
+ assert.equal(result.item.idea_approval,'Duyệt');assert.equal(calls,2);assert.equal(current.schedulerMarker,'preserve newer scheduler');assert.equal(current.books.main.Notifications.length,once.data.books.main.Notifications.length);
+});
