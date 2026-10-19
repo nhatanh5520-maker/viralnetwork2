@@ -916,7 +916,7 @@ function reviewV20Expense(initData,id,decision,feedback){const u=auth_(initData)
 function queueV20PaymentPhoto_(expense){
  const key='v20:expense:paid:'+expense.id,s=sheet_('Notifications'),all=s.getDataRange().getValues();
  if(all.slice(1).some(r=>String(r[1])===key))return;
- s.appendRow([Utilities.getUuid(),key,String(expense.telegram_id),'💸 ĐÃ HOÀN TIỀN\nDự án: '+expense.project+'\nNội dung sản xuất: '+expenseProductionText_(expense)+'\nKhoản chi: '+expense.description+'\nSố tiền: '+Number(expense.amount_vnd).toLocaleString('vi-VN')+' đ\nẢnh chuyển khoản được lưu trong Mini App → Tiện ích → Báo chi phí.','pending',new Date().toISOString(),'','',String(expense.payment_file_id)]);
+ s.appendRow([Utilities.getUuid(),key,String(expense.telegram_id),'💸 ĐÃ HOÀN TIỀN\nDự án: '+expense.project+'\nNội dung sản xuất: '+expenseProductionText_(expense)+'\nKhoản chi: '+expense.description+'\nSố tiền: '+Number(expense.amount_vnd).toLocaleString('vi-VN')+' đ\n'+(expense.payment_file_id?'Ảnh chuyển khoản được lưu trong web → Tiện ích → Báo chi phí.':'Kế toán đã xác nhận thanh toán, không đính kèm ảnh chuyển khoản.'),'pending',new Date().toISOString(),'','',String(expense.payment_file_id||'')]);
 }
 function payV20Expense(initData,id,imageData){
  const u=auth_(initData),accountant=String(setting_('accountant_telegram_id')||'');
@@ -925,13 +925,12 @@ function payV20Expense(initData,id,imageData){
  try{
   const sh=sheet_('Expenses'),all=sh.getDataRange().getValues(),i=all.findIndex((r,k)=>k>0&&String(r[0])===String(id));
   if(i<0)throw Error('Không thấy phiếu chi');
-  if(String(all[i][9])==='paid'){expense=rows_('Expenses').find(x=>String(x.id)===String(id));if(!expense.payment_file_id)throw Error('Phiếu ghi đã thanh toán nhưng thiếu ảnh; cần kiểm tra Sheet');}
+  if(String(all[i][9])==='paid'){expense=rows_('Expenses').find(x=>String(x.id)===String(id));}
   else{
    if(String(all[i][9])!=='approved')throw Error('Chỉ phiếu đã duyệt mới được thanh toán');
    if(!String(all[i][14]||'').trim())throw Error('Nhân viên cần bổ sung STK trước khi thanh toán');
-   const blob=v20Bill_(imageData),folder=DriveApp.getFolderById(prop_('BILL_FOLDER_ID'));
-   const file=folder.createFile(blob.setName('chuyen_khoan_'+id+'.'+blob.getName().split('.').pop()));
-   const updated=all[i].slice(9,21);updated[0]='paid';updated[8]=file.getId();updated[9]=file.getUrl();updated[10]=u.id;updated[11]=new Date().toISOString();sh.getRange(i+1,10,1,12).setValues([updated]);
+   let file=null;if(imageData!=null&&imageData!==''){const blob=v20Bill_(imageData),folder=DriveApp.getFolderById(prop_('BILL_FOLDER_ID'));file=folder.createFile(blob.setName('chuyen_khoan_'+id+'.'+blob.getName().split('.').pop()));}
+   const updated=all[i].slice(9,21);updated[0]='paid';updated[8]=file?file.getId():'';updated[9]=file?file.getUrl():'';updated[10]=u.id;updated[11]=new Date().toISOString();sh.getRange(i+1,10,1,12).setValues([updated]);
    SpreadsheetApp.flush();expense=rows_('Expenses').find(x=>String(x.id)===String(id));
   }
  }finally{lock.releaseLock()}
