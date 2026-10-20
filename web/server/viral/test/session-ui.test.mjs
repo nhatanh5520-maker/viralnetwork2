@@ -17,3 +17,13 @@ test('Director profile exposes working web logout instead of the removed Mini Ap
 test('an oversized photo batch is rejected before sending a request to the gateway',async()=>{
  const {dom,w}=await setup();try{let calls=0;w.fetch=async()=>{calls++;throw Error('must not send');};await assert.rejects(w.call('submitV20Expense',{bill_images:['x'.repeat(4000001)]}),/giới hạn một lần gửi/);assert.equal(calls,0);await assert.rejects(w.readWebResponse({status:413}),/chia nhỏ/);}finally{dom.window.close();}
 });
+
+test('initial Production failure leaves a retry action that can recover without re-login',async()=>{
+ const {dom,w}=await setup();try{
+ Object.defineProperty(w.document,'hidden',{value:false});w.eval("state={user:{id:'active',role:'employee'}};tab='production';productionReady=false;render=()=>{if(productionReady)$('screen').textContent='Sản xuất đã tải';else productionView()};");
+ w.fetch=async()=>({ok:false,status:503,json:async()=>({error:'Đọc dữ liệu quá thời gian. [57014]'})});
+ assert.equal(await w.loadProductionPage(),false);assert.ok(w.document.getElementById('productionRetry'));assert.match(w.document.getElementById('screen').textContent,/57014/);assert.doesNotMatch(w.document.getElementById('screen').textContent,/Đang tải sản xuất/);
+ w.fetch=async()=>({ok:true,status:200,json:async()=>({result:{productionPage:{ok:true,items:[],stats:{},hasMore:false},projects:[],peopleNames:{},productionPeople:[]}})});
+ w.document.getElementById('productionRetry').click();await new Promise(r=>setTimeout(r,15));assert.equal(w.document.getElementById('screen').textContent,'Sản xuất đã tải');assert.equal(w.eval('state.user.id'),'active');
+ }finally{dom.window.close();}
+});

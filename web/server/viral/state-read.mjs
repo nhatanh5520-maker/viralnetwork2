@@ -19,3 +19,12 @@ export function sharedStateRead(read){
  };
  load.invalidate=()=>{pending=null;};return load;
 }
+
+// Retry a cancelled read once, only for callers explicitly using the read path.
+// Permission, missing-record and unknown failures are never retried.
+export async function retryStateRead(read,{retry=false,pause=()=>new Promise(resolve=>setTimeout(resolve,500))}={}){
+ try{return await read();}catch(error){
+  if(!retry||error?.code!=='57014')throw error;
+  await pause();return read();
+ }
+}

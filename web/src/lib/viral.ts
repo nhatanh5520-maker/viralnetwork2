@@ -5,7 +5,7 @@ import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
 import {withViralWriteRetry} from '../../server/viral/approval-retry.mjs';
-import {sharedStateRead,stateReadFailure} from '../../server/viral/state-read.mjs';
+import {sharedStateRead,stateReadFailure,retryStateRead} from '../../server/viral/state-read.mjs';
 import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
 import {commitWithUploads} from '../../server/viral/commit-uploads.mjs';
 import {avatarResolver} from '../../server/viral/avatar-cache.mjs';
@@ -20,16 +20,17 @@ export async function webMember(){
  const svc=viralService();const {data,error:err}=await svc.from('viral_members').select('employee_id').eq('auth_user_id',user.id).eq('active',true).maybeSingle();
  if(err)throw err;if(!data)return null;return {employeeId:data.employee_id,email:user.email||'',authUserId:user.id};
 }
-async function readFreshViralState(){
+async function readFreshViralState(retry=false){
  const svc=viralService();let result;
- try{result=await svc.from('viral_state').select('data,version').eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();}catch(error){throw stateReadFailure(error);}
- const {data,error}=result;if(error){const failure=stateReadFailure(error);console.error('viral_state_read',{code:failure.code});throw failure;}
+ const started=Date.now();
+ try{result=await retryStateRead(async()=>{const response=await svc.from('viral_state').select('data,version').eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();if(response.error)throw response.error;return response;},{retry});}catch(error){const failure=stateReadFailure(error);console.error('viral_state_read',{code:failure.code,stage:'main',elapsed_ms:Date.now()-started,retry_enabled:retry});throw failure;}
+ const {data}=result;
  const rows=data.data.books.main.Notifications||[],h=rows[0]||[],status=h.indexOf('status'),key=h.indexOf('id');
  const ids=rows.slice(1).filter((r:any)=>['pending','failed'].includes(r[status])).map((r:any)=>'notification:'+r[key]);
  for(let i=0;i<ids.length;i+=100){const {data:sent,error:e}=await svc.from('viral_outbox').select('id').in('id',ids.slice(i,i+100)).eq('status','sent').abortSignal(AbortSignal.timeout(8000));if(e)throw stateReadFailure(e);const done=new Set((sent||[]).map((m:any)=>m.id));for(const r of rows.slice(1))if(done.has('notification:'+r[key])){r[status]='sent';r[h.indexOf('sent_at')]=new Date().toISOString();}}
  return {data:data.data,version:data.version};
 }
-const readSharedViralState=sharedStateRead(readFreshViralState);
+const readSharedViralState=sharedStateRead(()=>readFreshViralState(true));
 export async function loadViral(options:{share?:boolean}={}){
  return {svc:viralService(),...await (options.share?readSharedViralState():readFreshViralState())};
 }

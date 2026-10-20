@@ -26,3 +26,13 @@ test('a successful write can invalidate an older in-flight read for subsequent c
  let calls=0,release;const read=sharedStateRead(async()=>{calls++;if(calls===1){await new Promise(r=>release=r);return {version:1};}return {version:2};});
  const old=read();await Promise.resolve();read.invalidate();assert.equal((await read()).version,2);release();assert.equal((await old).version,1);assert.equal(calls,2);
 });
+
+test('a cancelled shared read retries once for all waiting callers',async()=>{
+ const {retryStateRead}=await import('../state-read.mjs');let calls=0,pauses=0;
+ const read=sharedStateRead(()=>retryStateRead(async()=>{calls++;if(calls===1)throw {code:'57014'};return {version:1509,data:{items:[]}};},{retry:true,pause:async()=>{pauses++;}}));
+ const results=await Promise.all(Array.from({length:20},()=>read()));assert.equal(calls,2);assert.equal(pauses,1);assert.ok(results.every(x=>x.version===1509));results[0].data.items.push(1);assert.deepEqual(results[1].data.items,[]);
+});
+test('cancelled reads stop after one retry; write paths and other errors never retry',async()=>{
+ const {retryStateRead}=await import('../state-read.mjs');
+ for(const [retry,code,expected] of [[true,'57014',2],[false,'57014',1],[true,'42501',1],[true,'PGRST116',1],[true,'STATE_READ',1]]){let calls=0;await assert.rejects(retryStateRead(async()=>{calls++;throw stateReadFailure({code});},{retry,pause:async()=>{}}),e=>e.code===code);assert.equal(calls,expected);}
+});
