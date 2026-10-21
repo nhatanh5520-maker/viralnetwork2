@@ -1,3 +1,4 @@
+import {ledgerHeaderRow} from './finance-ledger.mjs';
 import {JWT} from 'google-auth-library';
 import {financeConfig} from './admin.mjs';
 export function gridBook(response,name,dateColumn=1){
@@ -29,12 +30,12 @@ export async function readFinanceBook(data,env=process.env,fetcher=fetch){
  if(!response.ok)throw Error(response.status===403?'Google từ chối quyền đọc. Bật Sheets API và chia sẻ sheet cho email service account (Viewer).':response.status===404?'Không tìm thấy sheet hoặc tài khoản chưa có quyền xem.':response.status===400?'Không tìm thấy tab kế toán. Kiểm tra đúng tên tab, kể cả dấu cách.':'Google Sheets chưa phản hồi thành công. Hãy thử lại.');return response.json();};
  const raw=await get(params);
  // Detect the header before parsing so already-saved DATA TỔNG settings work without resaving.
- const plain=gridBook(raw,config.sheetName,null),ledger=String(plain.cells[0]?.[0]||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/Đ/g,'D').replace(/\s+/g,' ').trim().toUpperCase()==='NGAY THUC HIEN GIAO DICH';
- const book=ledger?gridBook(raw,config.sheetName,0):gridBook(raw,config.sheetName);
+ const plain=gridBook(raw,config.sheetName,null),ledger=ledgerHeaderRow(plain)>=0;
+ const book=ledger?plain:gridBook(raw,config.sheetName);
  if(book.cells.length>=50009)throw Error('Sheet vượt phạm vi 50.000 giao dịch. Cần mở rộng cấu hình đọc trước khi báo cáo.');
  if(!ledger)return {config,book};
- params.set('ranges',"'"+config.detailSheetName.replaceAll("'","''")+"'!A1:E50009");
- const detailBook=gridBook(await get(params),config.detailSheetName,0);
+ params.set('ranges',"'"+config.detailSheetName.replaceAll("'","''")+"'!A1:K50009");
+ const detailBook=gridBook(await get(params),config.detailSheetName,null);
  if(detailBook.cells.length>=50009)throw Error('Tab chi tiết vượt phạm vi đọc. Cần mở rộng trước khi báo cáo.');
  return {config,book,detailBook,format:'ledger-v2'};
 }
