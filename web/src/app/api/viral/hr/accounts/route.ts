@@ -1,5 +1,5 @@
 import {NextResponse} from 'next/server';import crypto from 'node:crypto';
-import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor,employeeAccountData,manualAccountInput} from '../../../../../../server/viral/hr-accounts.mjs';
+import {loadViral,webMember,sameOrigin,invalidateViralState} from '@/lib/viral';import {hrAccountActor,employeeAccountData,manualAccountInput} from '../../../../../../server/viral/hr-accounts.mjs';
 import {unfinishedAccount} from '../../../../../../server/viral/account-cleanup.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 const reply=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'no-store'}});
@@ -80,4 +80,4 @@ export async function POST(req:Request){let createdId:string|null=null,svc:any=n
  if(outcome==='linked')return reply({ok:true,message:'Tài khoản đã được lưu. Kiểm tra tin Telegram; nếu chưa nhận, HR dùng Gửi lại link đặt mật khẩu.'});
  if(outcome==='uncertain')return reply({error:'Chưa xác nhận được trạng thái tài khoản; giữ đăng nhập để đối chiếu. Quản trị cần kiểm tra Supabase trước khi tạo lại.'},409);
  if(outcome==='cleanup_failed')return reply({error:'Cấp tài khoản chưa hoàn tất; cần quản trị kiểm tra email mới trong Supabase Auth trước khi thử lại.'},409);
- }return reply({error:e instanceof Error?e.message:'Không tạo được tài khoản.'},400);}}
+ }return reply({error:e instanceof Error?e.message:'Không tạo được tài khoản.'},400);}finally{invalidateViralState();}}

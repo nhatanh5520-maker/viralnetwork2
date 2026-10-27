@@ -28,3 +28,41 @@ export async function retryStateRead(read,{retry=false,pause=()=>new Promise(res
   await pause();return read();
  }
 }
+
+const versionKey=value=>{
+ if(typeof value==='number'&&(!Number.isSafeInteger(value)||value<0))throw stateReadFailure({code:'STATE_VERSION'});
+ const key=String(value??'');if(!/^\d+$/.test(key))throw stateReadFailure({code:'STATE_VERSION'});return key;
+};
+// Cache only private, unfiltered snapshots, never sessions, users or rendered
+// responses. Every request checks the database version before reusing a value.
+// Writers never call this reader. Memory is bounded; an outage never serves stale data.
+export function versionedStateRead({readVersion,readSnapshot,maxBytes=32*1024*1024}){
+ const cache=new Map(),pending=new Map();let bytes=0,generation=0;
+ const load=async function(scope='full'){
+  const running=pending.get(scope);if(running?.generation===generation)return structuredClone(await running.promise);
+  const epoch=generation;
+  const operation=Promise.resolve().then(async()=>{
+   const current=versionKey(await readVersion());
+   const entry=cache.get(scope);
+   if(entry&&versionKey(entry.snapshot.version)===current){
+    cache.delete(scope);cache.set(scope,entry);return entry.snapshot;
+   }
+   const snapshot=await readSnapshot(scope);
+   if(!snapshot?.data||BigInt(versionKey(snapshot.version))<BigInt(current))throw stateReadFailure({code:'STATE_VERSION'});
+   const own=structuredClone(snapshot),size=Buffer.byteLength(JSON.stringify(own));
+   if(epoch===generation){
+    if(entry){bytes-=entry.size;cache.delete(scope);}
+    if(size<=maxBytes){
+     while(bytes+size>maxBytes&&cache.size){const key=cache.keys().next().value;bytes-=cache.get(key).size;cache.delete(key);}
+     cache.set(scope,{snapshot:own,size});bytes+=size;
+    }
+   }
+   return own;
+  });
+  pending.set(scope,{generation:epoch,promise:operation});
+  const clear=()=>{if(pending.get(scope)?.promise===operation)pending.delete(scope);};operation.then(clear,clear);
+  return structuredClone(await operation);
+ };
+ load.invalidate=()=>{generation++;cache.clear();bytes=0;pending.clear();};
+ return load;
+}

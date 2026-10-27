@@ -1,6 +1,7 @@
 import vm from 'node:vm';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import {ReadScopeMiss} from './state-scopes.mjs';
 const runtimeDir=[process.cwd()+'/server/viral',process.cwd()+'/web/server/viral'].find(p=>fs.existsSync(p+'/business.gs'));
 if(!runtimeDir)throw Error('Không tìm thấy mã nghiệp vụ Viral Network');
 const source=fs.readFileSync(runtimeDir+'/business.gs','utf8');
@@ -10,7 +11,8 @@ const chain=()=>new Proxy({}, {get:(_,key)=>key==='build'?()=>({}):key==='getHan
 const colNumber=s=>[...s].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
 export function createRuntime(input={},user=null,env={}) {
  const data=structuredClone(input);data.books??={};data.properties??={};data.files??={};data.outbox??=[];
- const cache=new Map();const uploads=[];
+ const cache=new Map();const uploads=[];let readScopeMiss=null;
+ const missingScope=name=>{readScopeMiss=new ReadScopeMiss(name);throw readScopeMiss;};
  const props={...data.properties,SHEET_ID:'main',BOT_TOKEN:env.BOT_TOKEN||'',WEB_APP_URL:env.WEB_APP_URL||'',BILL_FOLDER_ID:'bills',GROUP_GREETINGS_ENABLED:env.GROUP_GREETINGS_ENABLED==='true'?'true':'false'};
  const blob=(bytes,type='application/octet-stream',name='file')=>({getBytes:()=>[...Buffer.from(bytes)],getDataAsString:()=>Buffer.from(bytes).toString('utf8'),getContentType:()=>type,getName:()=>name,setName(n){name=n;return this;}});
  class Range {
@@ -42,8 +44,8 @@ export function createRuntime(input={},user=null,env={}) {
  for(const key of ['setFrozenRows','setFrozenColumns','hideColumns','showColumns','setColumnWidth','setColumnWidths'])Sheet.prototype[key]=function(){return this;};
  class Book {
   constructor(id){this.id=id;data.books[id]??={};}getId(){return this.id;}getUrl(){return env.WEB_APP_URL||'';}
-  getSheetByName(name){return Object.hasOwn(data.books[this.id],name)?new Sheet(name,this.id):null;}
-  insertSheet(name){data.books[this.id][name]??=[];return new Sheet(name,this.id);}getSheets(){return Object.keys(data.books[this.id]).map(n=>new Sheet(n,this.id));}
+  getSheetByName(name){if(env.READ_TABLES&&(this.id!=='main'||!env.READ_TABLES.includes(name)))missingScope(name);return Object.hasOwn(data.books[this.id],name)?new Sheet(name,this.id):null;}
+  insertSheet(name){if(env.READ_TABLES)missingScope('write:'+name);data.books[this.id][name]??=[];return new Sheet(name,this.id);}getSheets(){if(env.READ_TABLES)missingScope('all-sheets');return Object.keys(data.books[this.id]).map(n=>new Sheet(n,this.id));}
   getSpreadsheetTimeZone(){return env.GRID_TIMEZONE?.[this.id]||'Asia/Ho_Chi_Minh';}getSpreadsheetLocale(){return 'vi_VN';}toast(){}
  }
  const dateFormat=(value,zone,format)=>{
@@ -99,7 +101,7 @@ export function createRuntime(input={},user=null,env={}) {
  forgetDevice=function(initData){auth_(initData);return {ok:true};};
  `,context,{timeout:10000});
  vm.runInContext(webPolicy,context,{timeout:10000});
- const run=(name,args=[],internal=false)=>{if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);context.__call=name;context.__args=args;const result=vm.runInContext('globalThis[__call](...__args)',context,{timeout:20000});if(result&&typeof result==='object'&&!Array.isArray(result)&&(result.projects||result.user||result.item)){result.projectAvatars=vm.runInContext('webProjectImages_()',context,{timeout:5000});result.projectRecords=vm.runInContext('webProjectRecords_()',context,{timeout:5000});result.personalAvatars=vm.runInContext('webPersonalAvatars_()',context,{timeout:5000});}return result;};
+ const run=(name,args=[],internal=false)=>{if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);context.__call=name;context.__args=args;const result=vm.runInContext('globalThis[__call](...__args)',context,{timeout:20000});if(readScopeMiss)throw readScopeMiss;if(result&&typeof result==='object'&&!Array.isArray(result)&&(result.projects||result.user||result.item)){result.projectAvatars=vm.runInContext('webProjectImages_()',context,{timeout:5000});result.projectRecords=vm.runInContext('webProjectRecords_()',context,{timeout:5000});result.personalAvatars=vm.runInContext('webPersonalAvatars_()',context,{timeout:5000});}return result;};
  return {data,uploads,context,run};
 }
 export function initializeData(){const rt=createRuntime();for(const name of ['setupV20','setupPersonnel','setupV20Features','setupFieldAttendance','setupV2022'])rt.run(name,[],true);return rt.data;}

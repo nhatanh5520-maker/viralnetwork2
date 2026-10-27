@@ -2,7 +2,7 @@ import {retainPersonalAvatars} from '../../../../../server/viral/personal-avatar
 import {retainProjectImages,retainProjectDirectory} from '../../../../../server/viral/project-images.mjs';
 import {verifyMigrationBot} from '../../../../../server/viral/migration-bot.mjs';
 import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {JWT} from 'google-auth-library';
-import {webMember,loadViral,sameOrigin} from '@/lib/viral';import {adminActor} from '../../../../../server/viral/admin.mjs';
+import {webMember,loadViral,sameOrigin,invalidateViralState} from '@/lib/viral';import {adminActor} from '../../../../../server/viral/admin.mjs';
 import {prepareMigration,migrationPublic,copyDriveBill,rewriteBillURLs} from '../../../../../server/viral/migration.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 const reply=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'no-store'}});
@@ -60,4 +60,4 @@ export async function POST(req:Request){try{
   const {data:backupId,error:ae}=await svc.rpc('viral_activate_migration',{stage_id:stage.id,stage_version:stage.version+1,main_version:version,mappings:maps});if(ae)throw Error('Chưa kích hoạt: dữ liệu hoặc liên kết tài khoản thay đổi. Làm mới rồi kiểm tra lại.');return reply({ok:true,backupId});
  }
  throw Error('Thao tác chuyển đổi không hợp lệ.');
- }catch(e){return reply({error:e instanceof Error?e.message:'Không xử lý được chuyển dữ liệu.'},400);}}
+ }catch(e){return reply({error:e instanceof Error?e.message:'Không xử lý được chuyển dữ liệu.'},400);}finally{invalidateViralState();}}

@@ -1,10 +1,11 @@
 import {NextResponse} from 'next/server';
 import crypto from 'node:crypto';
-import {viralService,loadViral} from '@/lib/viral';
+import {viralService,loadViral,invalidateViralState} from '@/lib/viral';
 import {createRuntime} from '../../../../../server/viral/runtime.mjs';
 import {telegramFailure} from '../../../../../server/viral/telegram-errors.mjs';
 import {drainNotifications} from '../../../../../server/viral/notification-worker.mjs';
-import {commitSchedulerState} from '../../../../../server/viral/scheduler-commit.mjs';
+import {commitSchedulerState,prepareScheduler} from '../../../../../server/viral/scheduler-commit.mjs';
+import {scopeConfig} from '../../../../../server/viral/state-scopes.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 export async function GET(req:Request){
  if(process.env.VIRAL_MAINTENANCE==='true')return NextResponse.json({error:'Tạm dừng để chuyển dữ liệu.'},{status:503});
@@ -14,11 +15,21 @@ export async function GET(req:Request){
  const began=Date.now(),workerDeadline=began+50000;let phase='load_state';
  try{
   // Group shift/lunch greetings are disabled by default; work reminders remain.
-  const state=await loadViral(),rt=createRuntime(state.data,null,{BOT_TOKEN:token,WEB_APP_URL:process.env.VIRAL_WEB_URL,GROUP_GREETINGS_ENABLED:process.env.VIRAL_GROUP_GREETINGS_ENABLED});
-  phase='scheduler';rt.run('v16Scheduler',[],true);
+  const {state,rt,full}=await prepareScheduler({
+   loadPreview:()=>loadViral({share:true,scope:'scheduler'}),loadFresh:()=>loadViral(),
+   run:(data:any,preview:boolean)=>{
+    phase=preview?'scheduler_preview':'scheduler_fresh';
+    const result=createRuntime(data,null,{BOT_TOKEN:token,WEB_APP_URL:process.env.VIRAL_WEB_URL,GROUP_GREETINGS_ENABLED:process.env.VIRAL_GROUP_GREETINGS_ENABLED,...(preview?{READ_TABLES:scopeConfig('scheduler').tables}:{})});
+    result.run('v16Scheduler',[],true);return result;
+   },
+  });
   const h=rt.data.books.main.Notifications[0],events=rt.data.books.main.Notifications.slice(1).map((r:any)=>Object.fromEntries(h.map((k:string,i:number)=>[k,r[i]]))).filter((r:any)=>['pending','failed'].includes(r.status)).map((r:any)=>({id:'notification:'+r.id,chat_id:String(r.telegram_id),text:String(r.message),photo_file_id:r.photo_file_id||null}));
   events.push(...rt.data.outbox.filter((r:any)=>r.status==='pending').map((r:any)=>({id:r.id,chat_id:r.chatId,text:r.text,photo_file_id:null})));
-  phase='commit_scheduler';const {committed}=await commitSchedulerState(state.data,rt.data,()=>state.svc.rpc('viral_commit',{expected_version:state.version,new_data:rt.data,events}).abortSignal(AbortSignal.timeout(10000)));
+  phase='commit_scheduler';const {committed,changed}=await commitSchedulerState(state.data,rt.data,()=>{
+   if(!full)throw Error('Không được ghi từ dữ liệu kiểm tra lịch.');
+   return state.svc.rpc('viral_commit',{expected_version:state.version,new_data:rt.data,events}).abortSignal(AbortSignal.timeout(10000));
+  });
+  if(changed&&committed)invalidateViralState();
   // A scheduler CAS conflict must not block delivery of already committed events.
   const svc=viralService(),errors=new Set<string>();
   const counts=await drainNotifications({deadline:workerDeadline,
@@ -26,6 +37,7 @@ export async function GET(req:Request){
    send:async(m:any)=>{
    phase='send_telegram';let method='sendMessage',payload:any={chat_id:m.chat_id,text:m.body};
    if(m.photo_file_id){
+    if(!rt.data.files[m.photo_file_id]){const metadata=await loadViral({share:true,scope:'deliveryFiles'});rt.data.files=metadata.data.files;}
     const f=rt.data.files[m.photo_file_id];if(!f)throw Error('Không thấy ảnh thông báo');
     const {data:blob,error:e}=await svc.storage.from('viral-files').download(f.path);if(e||!blob)throw Error('Không đọc được ảnh thông báo');
     const form=new FormData();form.append('chat_id',m.chat_id);form.append('caption',String(m.body).slice(0,1024));form.append('photo',blob,f.name);method='sendPhoto';payload=form;

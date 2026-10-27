@@ -5,7 +5,8 @@ import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
 import {withViralWriteRetry} from '../../server/viral/approval-retry.mjs';
-import {sharedStateRead,stateReadFailure,retryStateRead} from '../../server/viral/state-read.mjs';
+import {versionedStateRead,stateReadFailure,retryStateRead} from '../../server/viral/state-read.mjs';
+import {scopeForMethod,scopeConfig,scopeSelect,scopedState,ReadScopeMiss} from '../../server/viral/state-scopes.mjs';
 import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
 import {commitWithUploads} from '../../server/viral/commit-uploads.mjs';
 import {avatarResolver} from '../../server/viral/avatar-cache.mjs';
@@ -31,10 +32,20 @@ async function readFreshViralState(retry=false){
  for(let i=0;i<ids.length;i+=100){const {data:sent,error:e}=await svc.from('viral_outbox').select('id').in('id',ids.slice(i,i+100)).eq('status','sent').abortSignal(AbortSignal.timeout(8000));if(e)throw stateReadFailure(e);const done=new Set((sent||[]).map((m:any)=>m.id));for(const r of rows.slice(1))if(done.has('notification:'+r[key])){r[status]='sent';r[h.indexOf('sent_at')]=new Date().toISOString();}}
  return {data:data.data,version:data.version};
 }
-const readSharedViralState=sharedStateRead(()=>readFreshViralState(true));
+async function stateQuery(columns:string,retry=true){
+ try{return await retryStateRead(async()=>{
+  const response=await viralService().from('viral_state').select(columns).eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();
+  if(response.error)throw response.error;return response.data;
+ },{retry});}catch(error){throw stateReadFailure(error);}
+}
+const readSharedViralState=versionedStateRead({
+ readVersion:async()=>{const row:any=await stateQuery('version');return row.version;},
+ readSnapshot:async(scope:string)=>scope==='full'?readFreshViralState(true):scopedState(await stateQuery(scopeSelect(scope)),scope),
+});
 export function invalidateViralState(){readSharedViralState.invalidate();}
-export async function loadViral(options:{share?:boolean}={}){
- return {svc:viralService(),...await (options.share?readSharedViralState():readFreshViralState())};
+export async function loadViral(options:{share?:boolean;scope?:string}={}){
+ if(options.scope&&!options.share)throw Error('Read scopes cannot be used for writes.');
+ return {svc:viralService(),...await (options.share?readSharedViralState(options.scope||'full'):readFreshViralState())};
 }
 export function sameOrigin(req:Request){const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)throw Error('Nguồn yêu cầu không hợp lệ.');}
 export const makeEvents=(data:any)=>{
@@ -48,14 +59,27 @@ export async function invokeViral(method:string,args:any[],initData:string,user:
  return queuedAttendance(method,()=>withViralWriteRetry(method,()=>invokeViralAttempt(method,args,initData,user)));
 }
 async function invokeViralAttempt(method:string,args:any[],initData:string,user:any){
+ const scope=scopeForMethod(method);
+ try{return await invokeViralOnce(method,args,initData,user,scope);}
+ catch(error){
+  if(scope&&error instanceof ReadScopeMiss){
+   console.warn('viral_read_profile_fallback',{method,table:error.table});
+   // Future business changes may add a dependency or initialization side effect.
+   // Retry from a fresh COMPLETE snapshot; never commit a partial projection.
+   return invokeViralOnce(method,args,initData,user,null);
+  }
+  throw error;
+ }
+}
+async function invokeViralOnce(method:string,args:any[],initData:string,user:any,scope:string|null){
  if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web đang tạm dừng để chuyển dữ liệu. Mini App cũ vẫn dùng bình thường.');
- const share=['snapshotHome','snapshotCore','snapshotManager','avatarBatch','accountingExpenses','productionPage','productionScreen','attendanceStatus','reviewQueue','staffProductionWorkload'].includes(method);
- const {svc,data,version}=await loadViral({share});
+ const {svc,data,version}=await loadViral(scope?{share:true,scope}:{});
  // Daily attendance and production do not depend on Google Sheets availability.
  // Compact archived totals serve monthly summaries; only historical row reports fetch Sheets.
  const needsArchivedRows=['fieldAttendanceReport','managerAttendanceDay'].includes(method);
  const archiveView=overlayAttendance(data,needsArchivedRows?await loadAttendanceArchive(data):null);
- let rt=createRuntime(archiveView.input,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
+ const runtimeEnv={BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL,...(scope?{READ_TABLES:scopeConfig(scope).tables}:{})};
+ let rt=createRuntime(archiveView.input,user,runtimeEnv);
  rt.context.__authInput=initData;
  const vm=await import('node:vm');
  if(['personnelDirectory','personnelDetail','savePersonnel','personnelHistory','restorePersonnel'].includes(method)){
@@ -86,13 +110,17 @@ async function invokeViralAttempt(method:string,args:any[],initData:string,user:
   fileIds=[String(expense.payment_file_id)];
  }
  for(const id of fileIds){const f=data.files[id];if(!f||f.deleted)throw Error('Không thấy tệp đính kèm');const {data:blob,error}=await svc.storage.from('viral-files').download(f.path);if(error||!blob)throw Error('Không đọc được tệp đính kèm');f.bytes=Buffer.from(await blob.arrayBuffer()).toString('base64');}
- if(fileIds.length){archiveView.input.files=data.files;rt=createRuntime(archiveView.input,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});}
+ if(fileIds.length){archiveView.input.files=data.files;rt=createRuntime(archiveView.input,user,runtimeEnv);}
  let result;
  if(method==='avatarBatch')result=await avatars(rt,args[0]);
  else result=rt.run(method,[initData,...args]);
  archiveView.strip(rt.data);
  for(const file of Object.values(rt.data.files||{}) as any[])delete file.bytes;
  for(const file of Object.values(data.files||{}) as any[])delete file.bytes;
+ if(scope){
+  if(rt.uploads.length||JSON.stringify(rt.data)!==JSON.stringify(data))throw new ReadScopeMiss('side-effect');
+  return result;
+ }
  if(JSON.stringify(rt.data)!==JSON.stringify(data)){
   await commitWithUploads({uploads:rt.uploads,
    upload:(file:any)=>svc.storage.from('viral-files').upload(file.id,file.bytes,{contentType:file.type,upsert:false}),
