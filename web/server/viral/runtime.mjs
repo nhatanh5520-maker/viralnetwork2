@@ -77,6 +77,14 @@ export function createRuntime(input={},user=null,env={}) {
  });
  context.__storePersonalImage=image=>{const id=context.__storeProjectImage(image);data.files[id].folder='person-avatars';return id;};
  vm.runInContext(source,context,{timeout:10000});
+ // Archived rows live in Sheets. Keep compact work totals in Supabase so ordinary
+ // snapshots and mutations remain independent of external history reads.
+ const summary=data.attendanceArchive?.summary,archiveIds=new Set(data.attendanceArchive?.ids||[]),att=data.books?.main?.Attendance||[],idColumn=att[0]?.indexOf('id');
+ const hasArchiveRows=att.slice(1).some(row=>archiveIds.has(String(row[idColumn])));
+ if(summary&&!hasArchiveRows){
+  context.__archivedWorkSummary=summary;
+  vm.runInContext(`const originalArchivedPerformance=performance_;performance_=function(month){return originalArchivedPerformance(month).map(p=>{const a=__archivedWorkSummary[String(month)]?.[String(p.telegram_id)];return a?{...p,work_days:p.work_days+Number(a.days||0),work_minutes:p.work_minutes+Number(a.minutes||0)}:p;});};`,context,{timeout:5000});
+ }
  vm.runInContext(`
  const originalTelegramAuth = auth_;
  auth_ = function(initData){

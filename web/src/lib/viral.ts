@@ -9,6 +9,7 @@ import {sharedStateRead,stateReadFailure,retryStateRead} from '../../server/vira
 import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
 import {commitWithUploads} from '../../server/viral/commit-uploads.mjs';
 import {avatarResolver} from '../../server/viral/avatar-cache.mjs';
+import {loadAttendanceArchive,overlayAttendance} from '../../server/viral/attendance-archive.mjs';
 export function viralService(){
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SERVICE_ROLE_KEY;
  if(!url||!key)throw Error('Chưa cấu hình Supabase cho Viral Network.');
@@ -31,6 +32,7 @@ async function readFreshViralState(retry=false){
  return {data:data.data,version:data.version};
 }
 const readSharedViralState=sharedStateRead(()=>readFreshViralState(true));
+export function invalidateViralState(){readSharedViralState.invalidate();}
 export async function loadViral(options:{share?:boolean}={}){
  return {svc:viralService(),...await (options.share?readSharedViralState():readFreshViralState())};
 }
@@ -49,7 +51,11 @@ async function invokeViralAttempt(method:string,args:any[],initData:string,user:
  if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web đang tạm dừng để chuyển dữ liệu. Mini App cũ vẫn dùng bình thường.');
  const share=['snapshotHome','snapshotCore','snapshotManager','avatarBatch','accountingExpenses','productionPage','productionScreen','attendanceStatus','reviewQueue','staffProductionWorkload'].includes(method);
  const {svc,data,version}=await loadViral({share});
- let rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
+ // Daily attendance and production do not depend on Google Sheets availability.
+ // Compact archived totals serve monthly summaries; only historical row reports fetch Sheets.
+ const needsArchivedRows=['fieldAttendanceReport','managerAttendanceDay'].includes(method);
+ const archiveView=overlayAttendance(data,needsArchivedRows?await loadAttendanceArchive(data):null);
+ let rt=createRuntime(archiveView.input,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
  rt.context.__authInput=initData;
  const vm=await import('node:vm');
  if(['personnelDirectory','personnelDetail','savePersonnel','personnelHistory','restorePersonnel'].includes(method)){
@@ -80,10 +86,11 @@ async function invokeViralAttempt(method:string,args:any[],initData:string,user:
   fileIds=[String(expense.payment_file_id)];
  }
  for(const id of fileIds){const f=data.files[id];if(!f||f.deleted)throw Error('Không thấy tệp đính kèm');const {data:blob,error}=await svc.storage.from('viral-files').download(f.path);if(error||!blob)throw Error('Không đọc được tệp đính kèm');f.bytes=Buffer.from(await blob.arrayBuffer()).toString('base64');}
- if(fileIds.length)rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
+ if(fileIds.length){archiveView.input.files=data.files;rt=createRuntime(archiveView.input,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});}
  let result;
  if(method==='avatarBatch')result=await avatars(rt,args[0]);
  else result=rt.run(method,[initData,...args]);
+ archiveView.strip(rt.data);
  for(const file of Object.values(rt.data.files||{}) as any[])delete file.bytes;
  for(const file of Object.values(data.files||{}) as any[])delete file.bytes;
  if(JSON.stringify(rt.data)!==JSON.stringify(data)){
