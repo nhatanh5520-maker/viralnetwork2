@@ -55,3 +55,13 @@ test('explicit refresh button request can still confirm successful refresh',asyn
  assert.equal(h.messages.length,1);assert.equal(h.messages[0][0],'Đã cập nhật dữ liệu');
  assert.match(source,/formDirty=false;refreshSnapshot\(true,true\)/);
 });
+
+test('refresh deferred by interaction returns null rather than a load failure',async()=>{
+ const h=harness();h.ctx.tab='attendance';h.ctx.screenInteractionActive=()=>true;
+ assert.equal(await h.ctx.refreshSnapshot(),null);assert.equal(h.calls.length,0);
+});
+test('data applied while editing is successful even if redraw is deferred',async()=>{
+ const h=harness();h.ctx.tab='attendance';const request=h.ctx.refreshSnapshot();h.ctx.screenInteractionActive=()=>true;
+ h.resolve({user:{id:'1',role:'employee'},attendance:{check_in:'saved'}});
+ assert.equal(await request,true);assert.equal(h.ctx.state.attendance.check_in,'saved');assert.ok(!h.calls.includes('render'));
+});

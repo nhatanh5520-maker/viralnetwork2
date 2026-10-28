@@ -12,12 +12,12 @@ const compiled=ts.transpileModule(fs.readFileSync(sourceURL,'utf8'),{compilerOpt
 const actualRequire=createRequire(sourceURL);
 function fixture(){
  const data=initializeData(),a=data.books.main.Employees;
- for(const [id,role,job] of [['1001','leader','Content'],['1002','employee','Editor'],['1004','employee','VJ']])a.push(a[0].map(k=>({telegram_id:id,name:'Test '+id,role,department:job,job_title:job,active:'true'}[k]||'')));
+ for(const [id,role,job] of [['1003','director','BGĐ'],['1001','leader','Content'],['1002','employee','Editor'],['1004','employee','VJ']])a.push(a[0].map(k=>({telegram_id:id,name:'Test '+id,role,department:job,job_title:job,active:'true'}[k]||'')));
  for(const [k,v] of [['office_lat','16.0544'],['office_lng','108.2022'],['radius_m','100']]){const r=data.books.main.Settings.find(r=>r[0]===k);if(r)r[1]=v;else data.books.main.Settings.push([k,v]);}
  return data;
 }
-function harness({dependencyMiss=false,sideEffect=false,readFault=null}={}){
- let state=fixture(),version=1,interfere=null;const queries=[],commits=[];
+function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null}={}){
+ let state=fixture(),version=1,interfere=null;const queries=[],commits=[],bookingReads=[];
  class Query{
   constructor(table){this.table=table;this.columns='';}
   select(columns){this.columns=columns;return this;}eq(){return this;}in(){return this;}abortSignal(){return this;}
@@ -43,6 +43,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null}={}){
  }};
  const exports={},sandbox={exports,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://test.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'test'}},Buffer,AbortSignal,setTimeout,console:{warn(){},error(){}},require:id=>{
   if(id==='server-only')return {};
+  if(id.endsWith('/google-booking.mjs'))return {readBookingBook:async options=>{bookingReads.push(options);if(!bookingBook)throw Error('Unexpected Google read');return structuredClone(bookingBook);}};
   if(id==='@supabase/supabase-js')return {createClient:()=>svc};
   if(id==='@/lib/supabase/server')return {createClient:async()=>({auth:{getUser:async()=>({data:{user:null}})}})};
   if(id.endsWith('/runtime.mjs'))return {createRuntime:(data,user,env)=>{
@@ -57,7 +58,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null}={}){
   return actualRequire(id);
  }};
  vm.runInNewContext(compiled,sandbox,{filename:sourceURL.pathname,timeout:10000});
- return {api:exports,queries,commits,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;},duringCommit:operation=>interfere=operation};
+ return {api:exports,queries,commits,bookingReads,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;},duringCommit:operation=>interfere=operation};
 }
 test('actual RPC reuses unchanged scoped data, reauthenticates each user and sees remote writes',async()=>{
  const h=harness(),run=id=>h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:id});
@@ -127,4 +128,13 @@ test('office field check-in/out is idempotent and status reads match committed a
  const again=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);assert.equal(again.already,true);
  const status=await h.api.invokeViral('snapshotAttendance',[],'supabase',user);assert.equal(status.attendance.check_in,first.attendance.check_in);assert.equal(status.attendance.check_out,out.attendance.check_out);
  assert.equal(h.commits.length,2,'repeated clicks must not create additional commits');
+});
+
+test('booking authorizes active Director before any Google read; employee and Leader cannot call API directly',async()=>{
+ const bookingBook={cells:[['Ngày','Mã Đơn Hàng','Tên Nhãn Hàng','Talent Booking','Doanh Thu Hợp Đồng (VNĐ)','Chi Phí Talent/Quay (VNĐ)'],['2026-10-29','BK1','Khách','Dự án',500000,100000]],readAt:'2026-10-28T01:00:00Z'},h=harness({bookingBook});
+ for(const employeeId of ['1001','1002','1004','not-active'])await assert.rejects(h.api.invokeViral('bookingReport',[{mode:'all'}],'supabase',{employeeId}));
+ assert.equal(h.bookingReads.length,0);
+ const report=await h.api.invokeViral('bookingReport',[{mode:'all',refresh:true}],'supabase',{employeeId:'1003'});assert.equal(report.total.revenue,500000);assert.equal(h.bookingReads.length,1);assert.equal(h.bookingReads[0].refresh,true);assert.equal(h.commits.length,0);assert.ok(!h.queries.includes('data,version'));
+ h.externalWrite(data=>{const a=data.books.main.Employees;a.find(r=>String(r[0])==='1003')[a[0].indexOf('active')]='false';return data;});
+ await assert.rejects(h.api.invokeViral('bookingReport',[{mode:'all'}],'supabase',{employeeId:'1003'}));assert.equal(h.bookingReads.length,1);
 });

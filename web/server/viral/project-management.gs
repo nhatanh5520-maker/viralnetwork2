@@ -3,6 +3,10 @@ function webProjectManager_(init){const u=auth_(init);if(!['leader','director'].
 function webProjectArchived_(p){return String(p.archived).toLowerCase()==='true';}
 function webProjectRecords_(){const explicit=rows_('Projects').filter(p=>p.code),known=new Set(explicit.map(p=>String(p.code).toUpperCase()));const legacy=[...new Set(rows_('ProductionItems').map(x=>String(x.project||'').trim()))].filter(Boolean).map(label=>{const m=/^([A-Z0-9_-]+)\s+-\s+(.+)$/i.exec(label);return m?{code:m[1],name:m[2]}:null;}).filter(p=>p&&!known.has(p.code.toUpperCase()));return [...explicit,...legacy].map(p=>({code:String(p.code),name:String(p.name),label:String(p.code)+' - '+String(p.name),archived:webProjectArchived_(p),telegram_group_chat_id:String(p.telegram_group_chat_id||''),revision:JSON.stringify([p.code,p.name,p.avatar_file_id||'',p.archived||'',p.updated_at||'',p.telegram_group_chat_id||''])}));}
 v20Projects_=function(){return [...new Set(webProjectRecords_().filter(p=>!p.archived).map(p=>p.label))].sort((a,b)=>a.localeCompare(b,'vi'));};
+function webActiveProductionRows_(items){
+ const archived=webProjectRecords_().filter(p=>p.archived),labels=new Set(archived.map(p=>p.label)),codes=new Set(archived.map(p=>p.code.toUpperCase()));
+ return items.filter(x=>{const label=String(x.project||'').trim(),code=/^([A-Z0-9_-]+)\s+-\s+/i.exec(label)?.[1]?.toUpperCase();return !labels.has(label)&&!codes.has(code);});
+}
 function webCheckProjectActive_(label){if(webProjectRecords_().some(p=>p.archived&&p.label===String(label||'').trim()))throw Error('Dự án đã ngưng sử dụng, không thể tạo nội dung mới.');}
 const webProjectCreateIdea_=createProductionItemData_;createProductionItemData_=function(init,data){webCheckProjectActive_(data?.project);return webProjectCreateIdea_(init,data);};
 function webProjectColumn_(sh,key){const h=sh.getDataRange().getValues()[0].map(String);let i=h.indexOf(key);if(i<0){i=h.length;sh.getRange(1,i+1).setValue(key);}return i+1;}

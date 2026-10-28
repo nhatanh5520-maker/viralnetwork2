@@ -1,13 +1,13 @@
 /* Receive only a small revision signal; all data still comes from authorized RPCs. */
 (function(){
- let tracker=new ViralChangeTracker(),client,channel,started=false,connecting=false,connected=false,checking=false,applying=false,flushTimer=null,renewTimer=null,lastCheck=0,lastLegacyRefresh=0,ready=null,stopped=false,failures=0,needsProductionCore=false,generation=0,identity='';
+ let tracker=new ViralChangeTracker(),client,channel,started=false,connecting=false,connected=false,checking=false,applying=false,flushTimer=null,renewTimer=null,lastCheck=0,lastLegacyRefresh=0,ready=null,stopped=false,failures=0,failureView='',needsProductionCore=false,generation=0,identity='';
  function status(value){document.body.dataset.liveData=value;}
- function canRefresh(){return !!state&&!document.hidden&&!busy&&!refreshing&&!approvalPending&&!approvalFocus&&!window._operationalTarget&&!screenInteractionActive();}
+ function canRefresh(){return !!state&&tab!=='booking'&&!document.hidden&&!busy&&!refreshing&&!approvalPending&&!approvalFocus&&!window._operationalTarget&&!screenInteractionActive();}
  function banner(){
-  const pending=tracker.relevant(tab).size;let box=$('liveDataUpdate');
-  if(!state||!pending||!failures&&canRefresh()){box?.remove();return;}
+  const pending=tracker.relevant(tab).size,failed=failures>0&&failureView===tab;let box=$('liveDataUpdate');
+  if(!state||!pending||!failed&&canRefresh()){box?.remove();return;}
   if(!box){box=document.createElement('div');box.id='liveDataUpdate';box.className='live-data-update';box.setAttribute('role','status');$('screen')?.before(box);}
-  box.textContent=failures?'Chưa tải được dữ liệu mới. Hệ thống đang tự thử lại.':formDirty?'Dữ liệu sẽ tự cập nhật sau khi bạn lưu hoặc hủy phần đang nhập.':'Dữ liệu sẽ tự cập nhật khi bạn hoàn tất thao tác.';
+  box.textContent=failed?'Chưa tải được dữ liệu mới. Hệ thống đang tự thử lại.':formDirty?'Dữ liệu sẽ tự cập nhật sau khi bạn lưu hoặc hủy phần đang nhập.':'Dữ liệu sẽ tự cập nhật khi bạn hoàn tất thao tác.';
  }
  function invalidate(scopes){if(!scopes.length)return;if(scopes.some(x=>['projects','people','settings'].includes(x)))needsProductionCore=true;pendingReadCalls.clear();corePromise=null;coreReady=false;managerPromise=null;lastManagerRefresh=0;if(scopes.some(x=>['production','projects','people','settings'].includes(x)))productionPageCache.clear();if(scopes.some(x=>['expenses','people','settings'].includes(x))&&typeof paymentWorkspace!=='undefined'){paymentWorkspace.loaded=false;expenseContentCache.clear();}}
  function ingest(signal){const changed=tracker.accept(signal);invalidate(changed);if(changed.length){banner();queue();}}
@@ -24,14 +24,14 @@
  async function flush(manual=false){
   if(applying||!state||document.hidden)return;const batch=tracker.relevant(tab);if(!batch.size){banner();return;}if(!manual&&!canRefresh()){banner();queue(busy||refreshing?250:1000);return;}
   const epoch=generation,view=tab;applying=true;
-  try{const ok=await refreshPage(batch,manual);if(epoch!==generation)return;if(ok&&tab===view){tracker.complete(batch);failures=0;}else if(tab===view)failures++;}
-  catch{if(epoch===generation)failures++;}
-  finally{if(epoch===generation){applying=false;banner();if(tracker.relevant(tab).size)queue(failures?Math.min(60000,10000*failures):1000);}}
+  try{const ok=await refreshPage(batch,manual);if(epoch!==generation)return;if(ok&&tab===view){tracker.complete(batch);failures=0;}else if(ok===false&&tab===view){if(failureView!==view)failures=0;failureView=view;failures++;}}
+  catch{if(epoch===generation&&tab===view){if(failureView!==view)failures=0;failureView=view;failures++;}}
+  finally{if(epoch===generation){applying=false;banner();if(tracker.relevant(tab).size)queue(failures&&failureView===tab?Math.min(60000,10000*failures):1000);}}
  }
  async function sdk(){if(window.supabase?.createClient)return;await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/viral/vendor/supabase.js?v=live1';script.onload=resolve;script.onerror=()=>{script.remove();reject(Error('SDK unavailable'));};document.head.append(script);});}
  async function disconnect(){connected=false;clearTimeout(renewTimer);renewTimer=null;const previous=client;client=null;channel=null;if(previous){await previous.removeAllChannels().catch(()=>{});previous.realtime.disconnect();}}
  function reset(){
-  generation++;tracker=new ViralChangeTracker();identity='';started=false;connecting=false;checking=false;applying=false;stopped=false;ready=null;lastCheck=0;lastLegacyRefresh=0;failures=0;needsProductionCore=false;
+  generation++;tracker=new ViralChangeTracker();identity='';started=false;connecting=false;checking=false;applying=false;stopped=false;ready=null;lastCheck=0;lastLegacyRefresh=0;failures=0;failureView='';needsProductionCore=false;
   clearTimeout(flushTimer);flushTimer=null;$('liveDataUpdate')?.remove();disconnect();status('disconnected');
  }
  async function connect(){if(connecting||stopped||document.hidden||!state)return;const epoch=generation;connecting=true;

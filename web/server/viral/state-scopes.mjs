@@ -25,7 +25,7 @@ const methods=Object.freeze({
  fieldAttendanceOptions:'attendanceOptions',snapshotAttendance:'attendance',attendanceStatus:'attendance',managerAttendanceDay:'attendance',fieldReviewData:'attendance',fieldAttendanceReport:'attendance',fieldConfig:'attendance',
  productionPage:'production',productionScreen:'production',staffProductionWorkload:'production',
  snapshotHome:'home',snapshotCore:'core',snapshotManager:'manager',reviewQueue:'review',
- accountingExpenses:'expenses',avatarBatch:'avatars',personnelDirectory:'personnel',
+ accountingExpenses:'expenses',avatarBatch:'avatars',personnelDirectory:'personnel',bookingReport:'personnel',
 });
 export function scopeForMethod(method){return Object.hasOwn(methods,method)?methods[method]:null;}
 export class ReadScopeMiss extends Error {
