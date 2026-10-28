@@ -90,6 +90,10 @@ function snapshotData_(initData,includeManager){
 }
 // Keep the first response small for managers. Their team data is loaded after the home screen.
 function snapshotCore(initData){return snapshot(initData,false);}
+function snapshotAttendance(initData){return readScope_(()=>{
+ const u=auth_(initData),me=String(u.id),today=stamp_(new Date(),'yyyy-MM-dd');
+ return {user:u,today,attendanceAccess:fieldAccess_(u),attendanceShift:fieldEnabled_()?(rows_('Schedule').find(x=>String(x.telegram_id)===me&&dateKey_(x.date)===today)||{start_time:setting_('start_time'),end_time:setting_('end_time')}):null,attendance:attendanceWithShift_(u,rows_('Attendance').find(r=>String(r.telegram_id)===me&&dateKey_(r.date)===today)||null,today),overtimeRequests:rows_('OvertimeRequests').filter(r=>String(r.telegram_id)===me).slice(-100).reverse(),settings:{start:setting_('start_time'),end:setting_('end_time'),lunchStart:setting_('lunch_start'),lunchEnd:setting_('lunch_end'),radius:setting_('radius_m')}};
+})}
 function snapshotHome(initData){return readScope_(()=>snapshotHomeData_(initData))}
 function snapshotHomeData_(initData){
  const u=auth_(initData),me=String(u.id),today=stamp_(new Date(),'yyyy-MM-dd'),people=people_(),prod=productionSnapshot_(u,true);

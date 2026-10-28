@@ -6,7 +6,7 @@ const news=['Announcements','PostComments','PostLikes'];
 const core=[...common,...production,...attendance,...news,'Ideas','Meetings','Leave','Overtime','OvertimeRequests','Expenses','ExpenseAttachments','EquipmentLoans','PaymentBatches'];
 const unique=values=>Object.freeze([...new Set(values)]);
 export const READ_SCOPES=Object.freeze({
- attendance:{tables:unique([...common,...attendance])},
+ attendance:{tables:unique([...common,...attendance,'OvertimeRequests'])},
  production:{tables:unique([...common,...production])},
  home:{tables:unique([...common,...production,...attendance])},
  core:{tables:unique(core)},
@@ -21,7 +21,7 @@ export const READ_SCOPES=Object.freeze({
  deliveryFiles:{tables:unique([]),files:true},
 });
 const methods=Object.freeze({
- attendanceStatus:'attendance',managerAttendanceDay:'attendance',fieldReviewData:'attendance',fieldAttendanceReport:'attendance',fieldConfig:'attendance',
+ snapshotAttendance:'attendance',attendanceStatus:'attendance',managerAttendanceDay:'attendance',fieldReviewData:'attendance',fieldAttendanceReport:'attendance',fieldConfig:'attendance',
  productionPage:'production',productionScreen:'production',staffProductionWorkload:'production',
  snapshotHome:'home',snapshotCore:'core',snapshotManager:'manager',reviewQueue:'review',
  accountingExpenses:'expenses',avatarBatch:'avatars',personnelDirectory:'personnel',

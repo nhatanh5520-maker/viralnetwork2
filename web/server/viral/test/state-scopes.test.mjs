@@ -26,7 +26,7 @@ function fixture(){
  data.adminAudit=[{private:'not-needed-by-these-reads'}];
  return data;
 }
-const calls=[['attendanceStatus',[]],['managerAttendanceDay',[new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Ho_Chi_Minh'})]],['fieldReviewData',[]],['fieldAttendanceReport',[new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Ho_Chi_Minh'}).slice(0,7)]],['fieldConfig',[]],['productionPage',[{}]],['productionPage',[{q:'Video',dateType:'all'}]],['productionScreen',[{}]],['staffProductionWorkload',[]],['snapshotHome',[]],['snapshotCore',[]],['snapshotManager',[]],['reviewQueue',['team']],['reviewQueue',['personal']],['accountingExpenses',[]],['personnelDirectory',[]]];
+const calls=[['snapshotAttendance',[]],['attendanceStatus',[]],['managerAttendanceDay',[new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Ho_Chi_Minh'})]],['fieldReviewData',[]],['fieldAttendanceReport',[new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Ho_Chi_Minh'}).slice(0,7)]],['fieldConfig',[]],['productionPage',[{}]],['productionPage',[{q:'Video',dateType:'all'}]],['productionScreen',[{}]],['staffProductionWorkload',[]],['snapshotHome',[]],['snapshotCore',[]],['snapshotManager',[]],['reviewQueue',['team']],['reviewQueue',['personal']],['accountingExpenses',[]],['personnelDirectory',[]]];
 for(const [method,args] of calls)test(`${method} scoped results and permissions match full state for all roles (${JSON.stringify(args)})`,()=>{
  const data=fixture(),scope=scopeForMethod(method);assert.ok(scope);let successes=0;
  for(const employeeId of ['1001','1002','1003','1004','1005','1006','9999']){
