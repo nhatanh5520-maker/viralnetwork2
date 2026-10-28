@@ -16,15 +16,15 @@ function fixture(){
  for(const [k,v] of [['office_lat','16.0544'],['office_lng','108.2022'],['radius_m','100']]){const r=data.books.main.Settings.find(r=>r[0]===k);if(r)r[1]=v;else data.books.main.Settings.push([k,v]);}
  return data;
 }
-function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null}={}){
- let state=fixture(),version=1,interfere=null;const queries=[],commits=[],bookingReads=[];
+function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null,outboxFault=null,uncertainCommit=false}={}){
+ let state=fixture(),version=1,interfere=null;const queries=[],commits=[],bookingReads=[],outboxReads=[];
  class Query{
   constructor(table){this.table=table;this.columns='';}
   select(columns){this.columns=columns;return this;}eq(){return this;}in(){return this;}abortSignal(){return this;}
   single(){
    queries.push(this.columns);
    if(this.table!=='viral_state')throw Error('Unexpected table');
-   const fault=readFault?.(this.columns,queries);if(fault)return Promise.resolve({data:null,error:{code:fault}});
+   const fault=readFault?.(this.columns,queries);if(fault)return Promise.resolve({data:null,error:typeof fault==='string'?{code:fault}:fault});
    if(this.columns==='version')return Promise.resolve({data:{version},error:null});
    if(this.columns==='data,version')return Promise.resolve({data:{version,data:structuredClone(state)},error:null});
    const row={version};for(const field of this.columns.split(',')){
@@ -33,13 +33,13 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
    }
    return Promise.resolve({data:structuredClone(row),error:null});
   }
-  then(resolve,reject){return Promise.resolve({data:[],error:null}).then(resolve,reject);}
+  then(resolve,reject){if(this.table==='viral_outbox')outboxReads.push(this.columns);return Promise.resolve({data:[],error:this.table==='viral_outbox'?outboxFault:null}).then(resolve,reject);}
  }
  const svc={from:table=>new Query(table),rpc:async(name,args)=>{
   assert.equal(name,'viral_commit');commits.push(args);
   if(interfere){const operation=interfere;interfere=null;state=operation(state);version++;}
   if(args.expected_version!==version)return {data:false,error:null};
-  state=structuredClone(args.new_data);version++;return {data:true,error:null};
+  state=structuredClone(args.new_data);version++;return uncertainCommit?{data:null,error:{message:'response lost'}}:{data:true,error:null};
  }};
  const exports={},sandbox={exports,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://test.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'test'}},Buffer,AbortSignal,setTimeout,console:{warn(){},error(){}},require:id=>{
   if(id==='server-only')return {};
@@ -58,7 +58,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
   return actualRequire(id);
  }};
  vm.runInNewContext(compiled,sandbox,{filename:sourceURL.pathname,timeout:10000});
- return {api:exports,queries,commits,bookingReads,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;},duringCommit:operation=>interfere=operation};
+ return {api:exports,queries,commits,bookingReads,outboxReads,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;},duringCommit:operation=>interfere=operation};
 }
 test('actual RPC reuses unchanged scoped data, reauthenticates each user and sees remote writes',async()=>{
  const h=harness(),run=id=>h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:id});
@@ -137,4 +137,37 @@ test('booking authorizes active Director before any Google read; employee and Le
  const report=await h.api.invokeViral('bookingReport',[{mode:'all',refresh:true}],'supabase',{employeeId:'1003'});assert.equal(report.total.revenue,500000);assert.equal(h.bookingReads.length,1);assert.equal(h.bookingReads[0].refresh,true);assert.equal(h.commits.length,0);assert.ok(!h.queries.includes('data,version'));
  h.externalWrite(data=>{const a=data.books.main.Employees;a.find(r=>String(r[0])==='1003')[a[0].indexOf('active')]='false';return data;});
  await assert.rejects(h.api.invokeViral('bookingReport',[{mode:'all'}],'supabase',{employeeId:'1003'}));assert.equal(h.bookingReads.length,1);
+});
+
+function pendingNotification(data){const a=data.books.main.Notifications;a.push(a[0].map(k=>({id:'pending-test',telegram_id:'1001',status:'pending',message:'Pending notification'}[k]||'')));return data;}
+function fieldReady(data){const a=data.books.main.Settings,r=a.find(r=>r[0]==='field_attendance_enabled');if(r)r[1]='true';else a.push(['field_attendance_enabled','true']);return data;}
+test('checkout retries a transient full-state fetch once and persists exactly one checkout',async()=>{
+ let fail=false,failures=0;const h=harness({readFault:columns=>fail&&columns==='data,version'&&failures++===0?{code:'',message:'TypeError: fetch failed',details:'private endpoint'}:null});
+ h.externalWrite(fieldReady);const point={mode:'office',lat:16.0544,lng:108.2022,accuracy:10},user={employeeId:'1004'};
+ const first=await h.api.invokeViral('fieldAttendance',['in',point],'supabase',user);fail=true;
+ const result=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);assert.ok(result.attendance.check_out);assert.equal(result.attendance.check_in,first.attendance.check_in);assert.equal(h.commits.length,2);
+ const repeated=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);assert.equal(repeated.already,true);assert.equal(h.commits.length,2);
+});
+test('attendance does not depend on outbox reconciliation, retains pending events and uses complete fresh state',async()=>{
+ const h=harness({outboxFault:{code:'',message:'TypeError: fetch failed'}});h.externalWrite(data=>pendingNotification(fieldReady(data)));
+ const point={mode:'office',lat:16.0544,lng:108.2022,accuracy:10},user={employeeId:'1004'};
+ await h.api.invokeViral('fieldAttendance',['in',point],'supabase',user);const result=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);
+ assert.ok(result.attendance.check_out);assert.equal(h.outboxReads.length,0);assert.equal(h.getState().books.main.Notifications.length,2);
+ assert.ok(h.commits.at(-1).events.some(x=>x.id==='notification:pending-test'));assert.equal(h.queries.filter(x=>x==='data,version').length,2);
+ await assert.rejects(h.api.loadViral(),e=>e.code==='STATE_NETWORK'&&e.stage==='notifications');assert.equal(h.outboxReads.length,1,'other callers keep reconciliation');
+});
+test('lost commit response is never replayed automatically and status read can confirm the saved checkout',async()=>{
+ const h=harness({uncertainCommit:true});h.externalWrite(fieldReady);const point={mode:'office',lat:16.0544,lng:108.2022,accuracy:10},user={employeeId:'1004'};
+ await assert.rejects(h.api.invokeViral('fieldAttendance',['in',point],'supabase',user),/Chưa xác nhận/);
+ assert.ok((await h.api.invokeViral('attendanceStatus',[],'supabase',user)).attendance.check_in);assert.equal(h.commits.length,1);
+ await assert.rejects(h.api.invokeViral('fieldAttendance',['out',point],'supabase',user),/Chưa xác nhận/);
+ const status=await h.api.invokeViral('attendanceStatus',[],'supabase',user);assert.ok(status.attendance.check_out);assert.equal(h.commits.length,2);
+ const repeated=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);assert.equal(repeated.already,true);assert.equal(h.commits.length,2);
+});
+
+test('attendance status retries a scoped network read and its cancellation fallback does not depend on outbox',async()=>{
+ let faults=0;const h=harness({readFault:columns=>columns.includes('s0:')&&faults++===0?{message:'TypeError: fetch failed'}:null});
+ await h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});assert.equal(h.queries.filter(x=>x.includes('s0:')).length,2);assert.ok(!h.queries.includes('data,version'));
+ const fallback=harness({readFault:columns=>columns.includes('s0:')?'57014':null,outboxFault:{code:'42501'}});fallback.externalWrite(pendingNotification);
+ const result=await fallback.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});assert.equal(result.attendance,null);assert.equal(fallback.outboxReads.length,0);assert.equal(fallback.commits.length,0);
 });

@@ -24,41 +24,45 @@ export async function webMember(){
  const svc=viralService();const {data,error:err}=await svc.from('viral_members').select('employee_id').eq('auth_user_id',user.id).eq('active',true).maybeSingle();
  if(err)throw err;if(!data)return null;return {employeeId:data.employee_id,email:user.email||'',authUserId:user.id};
 }
-async function readFreshViralState(retry=false){
+async function readFreshViralState(retry=false,syncNotifications=true){
  const svc=viralService();let result;
  const started=Date.now();
- try{result=await retryStateRead(async()=>{const response=await svc.from('viral_state').select('data,version').eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();if(response.error)throw response.error;return response;},{retry});}catch(error){const failure=stateReadFailure(error);console.error('viral_state_read',{code:failure.code,stage:'main',elapsed_ms:Date.now()-started,retry_enabled:retry});throw failure;}
+ try{result=await retryStateRead(async()=>{const response=await svc.from('viral_state').select('data,version').eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();if(response.error)throw stateReadFailure(response.error,'main',response.status);return response;},{retry});}catch(error){const failure=stateReadFailure(error,'main');console.error('viral_state_read',{code:failure.code,stage:'main',elapsed_ms:Date.now()-started,retry_enabled:retry});throw failure;}
  const {data}=result;
+ // Attendance uses the latest COMPLETE state but does not wait for notification delivery reconciliation.
+ // Existing notification events keep their durable IDs; viral_commit inserts them ON CONFLICT DO NOTHING.
+ if(!syncNotifications)return {data:data.data,version:data.version};
  const rows=data.data.books.main.Notifications||[],h=rows[0]||[],status=h.indexOf('status'),key=h.indexOf('id');
  const ids=rows.slice(1).filter((r:any)=>['pending','failed'].includes(r[status])).map((r:any)=>'notification:'+r[key]);
- for(let i=0;i<ids.length;i+=100){const {data:sent,error:e}=await svc.from('viral_outbox').select('id').in('id',ids.slice(i,i+100)).eq('status','sent').abortSignal(AbortSignal.timeout(8000));if(e)throw stateReadFailure(e);const done=new Set((sent||[]).map((m:any)=>m.id));for(const r of rows.slice(1))if(done.has('notification:'+r[key])){r[status]='sent';r[h.indexOf('sent_at')]=new Date().toISOString();}}
+ for(let i=0;i<ids.length;i+=100){const {data:sent,error:e}=await svc.from('viral_outbox').select('id').in('id',ids.slice(i,i+100)).eq('status','sent').abortSignal(AbortSignal.timeout(8000));if(e)throw stateReadFailure(e,'notifications');const done=new Set((sent||[]).map((m:any)=>m.id));for(const r of rows.slice(1))if(done.has('notification:'+r[key])){r[status]='sent';r[h.indexOf('sent_at')]=new Date().toISOString();}}
  return {data:data.data,version:data.version};
 }
-async function stateQuery(columns:string,retry=true){
+async function stateQuery(columns:string,retry=true,retryCancelled=true){
+ const stage=columns==='version'?'version':'profile',started=Date.now();
  try{return await retryStateRead(async()=>{
   const response=await viralService().from('viral_state').select(columns).eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();
-  if(response.error)throw response.error;return response.data;
- },{retry});}catch(error){throw stateReadFailure(error);}
+  if(response.error)throw stateReadFailure(response.error,stage,response.status);return response.data;
+ },{retry,retryCancelled});}catch(error){const failure=stateReadFailure(error,stage);console.error('viral_state_read',{code:failure.code,stage:failure.stage,http_status:failure.httpStatus,elapsed_ms:Date.now()-started,retry_enabled:retry});throw failure;}
 }
 const readSharedViralState=versionedStateRead({
  readVersion:async()=>{const row:any=await stateQuery('version');return row.version;},
  readSnapshot:async(scope:string)=>{
   if(scope==='full')return readFreshViralState(true);
-  try{return scopedState(await stateQuery(scopeSelect(scope),false),scope);}
+  try{return scopedState(await stateQuery(scopeSelect(scope),true,false),scope);}
   catch(error){
    // JSON-path projection can time out on a large compressed state document.
    // Fall back only on database cancellation, never on permissions or missing rows.
    if((error as any)?.code!=='57014')throw error;
    console.warn('viral_scoped_read_timeout',{scope});
-   const fresh=await readFreshViralState(true);
+   const fresh=await readFreshViralState(true,scope!=='attendance');
    return {data:projectState(fresh.data,scope),version:fresh.version};
   }
  },
 });
 export function invalidateViralState(){readSharedViralState.invalidate();}
-export async function loadViral(options:{share?:boolean;scope?:string}={}){
+export async function loadViral(options:{share?:boolean;scope?:string;skipNotificationSync?:boolean}={}){
  if(options.scope&&!options.share)throw Error('Read scopes cannot be used for writes.');
- return {svc:viralService(),...await (options.share?readSharedViralState(options.scope||'full'):readFreshViralState(true))};
+ return {svc:viralService(),...await (options.share?readSharedViralState(options.scope||'full'):readFreshViralState(true,!options.skipNotificationSync))};
 }
 export function sameOrigin(req:Request){const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)throw Error('Nguồn yêu cầu không hợp lệ.');}
 export const makeEvents=(data:any)=>{
@@ -86,7 +90,7 @@ async function invokeViralAttempt(method:string,args:any[],initData:string,user:
 }
 async function invokeViralOnce(method:string,args:any[],initData:string,user:any,scope:string|null){
  if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web đang tạm dừng để chuyển dữ liệu. Mini App cũ vẫn dùng bình thường.');
- const {svc,data,version}=await loadViral(scope?{share:true,scope}:{});
+ const {svc,data,version}=await loadViral(scope?{share:true,scope}:{skipNotificationSync:['attendance','fieldAttendance'].includes(method)});
  // Daily attendance and production do not depend on Google Sheets availability.
  // Compact archived totals serve monthly summaries; only historical row reports fetch Sheets.
  const needsArchivedRows=['fieldAttendanceReport','managerAttendanceDay'].includes(method);
