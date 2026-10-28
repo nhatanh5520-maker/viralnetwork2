@@ -1,6 +1,6 @@
 
 const tg=window.Telegram?.WebApp;try{tg?.ready();tg?.expand()}catch(e){console.warn('Telegram WebApp init:',e)}let init='';let state,tab='home',busy=false,refreshing=false,coreReady=false,corePromise=null,productionReady=false,managerPromise=null,lastRefresh=0,lastManagerRefresh=0,lastProductionRefresh=0,formDirty=false;const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let statusTimer,webSessionGeneration=0;
+let statusTimer,webSessionGeneration=0,webWriteGeneration=0;
 async function readWebResponse(response){if(response.status===413)throw Error('Tổng ảnh hoặc tệp vượt giới hạn một lần gửi. Hãy giảm số ảnh hoặc chia nhỏ đợt thanh toán.');try{return await response.json();}catch{throw Error([502,503,504].includes(response.status)?'Máy chủ phản hồi chậm hoặc tạm thời không kết nối được. Nếu vừa lưu, hãy làm mới để kiểm tra kết quả trước khi thử lại.':'Máy chủ trả phản hồi không hợp lệ. Vui lòng tải lại trang.');}}
 function resetWebSession(){webSessionGeneration++;state=null;approvalFocus=null;approvalPending=null;window._operationalTarget=null;formDirty=false;coreReady=false;corePromise=null;productionReady=false;productionLoadError='';managerPromise=null;lastManagerRefresh=0;pendingReadCalls.clear();productionPageCache.clear();avatarCache.clear();window.dispatchEvent(new Event('viral:session-reset'));}
 function msg(s,error=false){
@@ -18,6 +18,7 @@ const pendingReadCalls=new Map();
 const readMethods=new Set(['snapshotAttendance','snapshotHome','snapshotCore','snapshotManager','productionPage','productionScreen','reviewQueue','staffProductionWorkload','attendanceStatus','managerAttendanceDay','personnelPerformance','equipmentProjectOptions','fieldAttendanceOptions','fieldReviewData','fieldConfig','fieldAttendanceReport','financeReport','openOperationalWork','openProductionWorkTask','expenseProductionOptions']);
 function call(method,...args){if(!readMethods.has(method))return callTransport(method,...args);const key=JSON.stringify([method,...args]);if(pendingReadCalls.has(key))return pendingReadCalls.get(key);const request=callTransport(method,...args).finally(()=>{if(pendingReadCalls.get(key)===request)pendingReadCalls.delete(key)});pendingReadCalls.set(key,request);return request;}
 async function callTransport(method,...args){
+ if(!readMethods.has(method))webWriteGeneration++;
  const generation=webSessionGeneration,payload=JSON.stringify({method,args,initData:tg?.initData||''});if(new Blob([payload]).size>4000000)throw Error('Tổng ảnh hoặc tệp vượt giới hạn một lần gửi. Hãy giảm số ảnh hoặc chia nhỏ đợt thanh toán.');const response=await fetch('/api/viral/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,credentials:'same-origin'});
  const body=await readWebResponse(response);if(generation!==webSessionGeneration)throw Error('Phiên đăng nhập đã thay đổi. Bỏ qua kết quả của phiên trước.');if(!response.ok)throw Error(body.error||'Không kết nối được máy chủ');const scopes=window.ViralMutationScopes?.(method)||[];if(scopes.length&&body.result?.ok!==false)window.dispatchEvent(new CustomEvent('viral:saved',{detail:{scopes}}));return body.result;
 }
@@ -116,7 +117,21 @@ function tasksView(){
  $('screen').querySelectorAll('[data-review-queue]').forEach(b=>b.onclick=()=>reviewQueuedTask(b.dataset.reviewQueue,b.dataset.decision));
 }
 function currentReviewScope(){return 'personal'}
-async function loadReviewQueue(){try{const scope=currentReviewScope(),q=await call('reviewQueue',scope);if(scope!==currentReviewScope())return;if(!Array.isArray(q))throw Error('Máy chủ không trả danh sách chờ duyệt.');state.reviewQueue=q;if(tab==='tasks'&&!screenInteractionActive())render()}catch(e){msg('Việc chờ duyệt: '+(e.message||String(e)),true);state.reviewQueue=[];if(tab==='tasks'&&!screenInteractionActive())render()}}
+let reviewQueueRequest=0;
+async function loadReviewQueue(){
+ const request=++reviewQueueRequest,session=webSessionGeneration,scope=currentReviewScope();
+ try{const q=await call('reviewQueue',scope);if(session!==webSessionGeneration||request!==reviewQueueRequest||scope!==currentReviewScope())return;
+  if(!Array.isArray(q))throw Error('Máy chủ không trả danh sách chờ duyệt.');state.reviewQueue=q;
+  if(tab==='tasks'&&!busy&&!screenInteractionActive())render();
+ }catch(e){
+  if(session!==webSessionGeneration||request!==reviewQueueRequest||scope!==currentReviewScope())return;
+  // A background task read must not cover attendance confirmation with an error modal.
+  // Keep the previous queue: a failed read does not mean there are no pending tasks.
+  if(tab!=='tasks'||busy)return;
+  $('message').textContent='Chưa tải được việc chờ duyệt. Bấm Làm mới để thử lại.';
+  $('message').className='error';console.warn('review_queue_read_failed',e);
+ }
+}
 async function reviewQueuedTask(id,decision){if(busy)return;busy=true;msg('Đang duyệt công việc…');try{const refreshed=await call('reviewTask',id,decision);if(!refreshed?.user)throw Error('Không nhận được kết quả duyệt.');state={...state,...refreshed};await loadReviewQueue();msg(decision==='done'?'Đã duyệt hoàn thành.':'Đã yêu cầu sửa.');render()}catch(e){msg(e.message||String(e),true)}finally{busy=false}}
 
 function leaveView(){
@@ -281,18 +296,21 @@ function screenInteractionActive(){
 async function refreshSnapshot(manual=false){
  if(!state||busy||refreshing||document.hidden||['performance','fieldReview','fieldReport'].includes(tab)||!manual&&screenInteractionActive())return;
  if(tab==='production'){refreshing=true;try{const ok=await loadProductionPage(0,false,true,!manual);if(manual&&ok)msg('Đã cập nhật dữ liệu')}finally{refreshing=false}return}
+ const refreshTab=tab,refreshSession=webSessionGeneration,refreshStarted=lastRefresh,refreshWrite=webWriteGeneration;
  refreshing=true;const button=$('refreshApp');if(button)button.disabled=true;
  try{
   const fresh=await call(tab==='attendance'?'snapshotAttendance':tab==='home'?'snapshotHome':'snapshotCore');if(!fresh?.user?.id)throw Error('Không nhận được dữ liệu mới.');
+  if(tab!==refreshTab||webSessionGeneration!==refreshSession||busy||lastRefresh!==refreshStarted||webWriteGeneration!==refreshWrite)return false;
   let extra={},queue,refreshError='';
   if(['director','leader'].includes(fresh.user.role)){
    if(['manage','schedule','news','staff'].includes(tab)&&(manual||Date.now()-lastManagerRefresh>=60000))try{extra=await call('snapshotManager');lastManagerRefresh=Date.now()}catch(e){if(manual)refreshError='Dữ liệu quản lý: '+(e.message||String(e))}
   }
   if(tab==='tasks')try{queue=await call('reviewQueue',currentReviewScope())}catch(e){if(manual)refreshError+=(refreshError?'\n':'')+'Danh sách chờ duyệt: '+(e.message||String(e))}
+  if(tab!==refreshTab||webSessionGeneration!==refreshSession||busy||lastRefresh!==refreshStarted||webWriteGeneration!==refreshWrite)return false;
   state={...state,...fresh,...extra,...(Array.isArray(queue)?{reviewQueue:queue}:{})};lastRefresh=Date.now();if(!['home','attendance'].includes(tab))coreReady=true;
   const redraw=manual||!screenInteractionActive();if(redraw)render();
   if(manual)msg(refreshError||'Đã cập nhật dữ liệu',!!refreshError);return redraw;
- }catch(e){if(manual)msg('Không làm mới được: '+(e.message||String(e)),true);return false;}
+ }catch(e){if(manual&&tab===refreshTab&&webSessionGeneration===refreshSession&&!busy&&lastRefresh===refreshStarted&&webWriteGeneration===refreshWrite)msg('Không làm mới được: '+(e.message||String(e)),true);return false;}
  finally{refreshing=false;if(button)button.disabled=false}
 }
 let productionRequest=0,productionLoadError='';const productionPageCache=new Map();

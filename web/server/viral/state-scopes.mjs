@@ -7,11 +7,12 @@ const core=[...common,...production,...attendance,...news,'Ideas','Meetings','Le
 const unique=values=>Object.freeze([...new Set(values)]);
 export const READ_SCOPES=Object.freeze({
  attendance:{tables:unique([...common,...attendance,'OvertimeRequests'])},
+ attendanceOptions:{tables:unique([...common,'Schedule','Projects','ProductionItems','ProductionTeam','UserAvatars'])},
  production:{tables:unique([...common,...production])},
  home:{tables:unique([...common,...production,...attendance])},
  core:{tables:unique(core)},
  manager:{tables:unique([...common,...attendance,...news,'Tasks','Leave','Overtime','OvertimeRequests'])},
- review:{tables:unique(core)},
+ review:{tables:unique([...common,'ProductionItems','ProductionTaskLinks','Tasks','Leave','EquipmentLoans','Expenses','Attendance','AttendanceApprovers'])},
  expenses:{tables:unique([...common,...production,'Expenses','ExpenseAttachments','PaymentBatches'])},
  avatars:{tables:unique([...common,'UserAvatars'])},
  personnel:{tables:unique(common)},
@@ -21,7 +22,7 @@ export const READ_SCOPES=Object.freeze({
  deliveryFiles:{tables:unique([]),files:true},
 });
 const methods=Object.freeze({
- snapshotAttendance:'attendance',attendanceStatus:'attendance',managerAttendanceDay:'attendance',fieldReviewData:'attendance',fieldAttendanceReport:'attendance',fieldConfig:'attendance',
+ fieldAttendanceOptions:'attendanceOptions',snapshotAttendance:'attendance',attendanceStatus:'attendance',managerAttendanceDay:'attendance',fieldReviewData:'attendance',fieldAttendanceReport:'attendance',fieldConfig:'attendance',
  productionPage:'production',productionScreen:'production',staffProductionWorkload:'production',
  snapshotHome:'home',snapshotCore:'core',snapshotManager:'manager',reviewQueue:'review',
  accountingExpenses:'expenses',avatarBatch:'avatars',personnelDirectory:'personnel',

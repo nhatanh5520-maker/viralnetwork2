@@ -16,7 +16,7 @@ function fixture(){
  for(const [k,v] of [['office_lat','16.0544'],['office_lng','108.2022'],['radius_m','100']]){const r=data.books.main.Settings.find(r=>r[0]===k);if(r)r[1]=v;else data.books.main.Settings.push([k,v]);}
  return data;
 }
-function harness({dependencyMiss=false,sideEffect=false}={}){
+function harness({dependencyMiss=false,sideEffect=false,readFault=null}={}){
  let state=fixture(),version=1,interfere=null;const queries=[],commits=[];
  class Query{
   constructor(table){this.table=table;this.columns='';}
@@ -24,6 +24,7 @@ function harness({dependencyMiss=false,sideEffect=false}={}){
   single(){
    queries.push(this.columns);
    if(this.table!=='viral_state')throw Error('Unexpected table');
+   const fault=readFault?.(this.columns,queries);if(fault)return Promise.resolve({data:null,error:{code:fault}});
    if(this.columns==='version')return Promise.resolve({data:{version},error:null});
    if(this.columns==='data,version')return Promise.resolve({data:{version,data:structuredClone(state)},error:null});
    const row={version};for(const field of this.columns.split(',')){
@@ -90,4 +91,40 @@ test('a read with an initialization side effect reruns from full state and canno
  const h=harness({sideEffect:true}),before=h.getState();const result=await h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});
  assert.equal(result.attendance,null);assert.equal(h.commits.length,1);assert.equal(h.getState().futureInitialization,'done');
  assert.deepEqual(h.getState().books,before.books);assert.ok(h.queries.includes('data,version'));
+});
+
+test('scoped attendance cancellation falls back to fresh full read, caches only projection and does not commit',async()=>{
+ const h=harness({readFault:columns=>columns.includes('s0:')?'57014':null});
+ const result=await h.api.invokeViral('snapshotAttendance',[],'supabase',{employeeId:'1004'});
+ assert.equal(result.user.id,'1004');assert.equal(h.queries.filter(x=>x==='data,version').length,1);
+ await h.api.invokeViral('snapshotAttendance',[],'supabase',{employeeId:'1002'});
+ assert.equal(h.queries.filter(x=>x==='data,version').length,1);assert.equal(h.commits.length,0);
+});
+test('projection permission failure does not fall back to a different read path',async()=>{
+ const h=harness({readFault:columns=>columns.includes('s0:')?'42501':null});
+ await assert.rejects(h.api.invokeViral('snapshotAttendance',[],'supabase',{employeeId:'1004'}),e=>e.code==='42501');
+ assert.ok(!h.queries.includes('data,version'));assert.equal(h.commits.length,0);
+});
+test('check-in retries cancelled SELECT once before executing exactly one commit',async()=>{
+ let faults=0;const h=harness({readFault:columns=>columns==='data,version'&&faults++===0?'57014':null});
+ const result=await h.api.invokeViral('attendance',['in',16.0544,108.2022,10],'supabase',{employeeId:'1004'});
+ assert.equal(result.ok,true);assert.equal(h.queries.filter(x=>x==='data,version').length,2);assert.equal(h.commits.length,1);
+});
+test('persistent read cancellations stop without attempting a check-in commit',async()=>{
+ const h=harness({readFault:columns=>columns==='data,version'?'57014':null});
+ await assert.rejects(h.api.invokeViral('attendance',['in',16.0544,108.2022,10],'supabase',{employeeId:'1004'}),e=>e.code==='57014');
+ assert.equal(h.queries.length,2);assert.equal(h.commits.length,0);
+});
+
+test('office field check-in/out is idempotent and status reads match committed attendance',async()=>{
+ const h=harness();h.externalWrite(data=>{const a=data.books.main.Settings,r=a.find(r=>r[0]==='field_attendance_enabled');if(r)r[1]='true';else a.push(['field_attendance_enabled','true']);return data;});
+ const point={mode:'office',lat:16.0544,lng:108.2022,accuracy:10},user={employeeId:'1004'};
+ const first=await h.api.invokeViral('fieldAttendance',['in',point],'supabase',user);
+ assert.equal(first.ok,true);assert.equal(first.attendance.in_context.status,'approved');
+ const repeated=await h.api.invokeViral('fieldAttendance',['in',point],'supabase',user);assert.equal(repeated.already,true);
+ assert.equal(h.getState().books.main.Attendance.length,2);
+ const out=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);assert.equal(out.ok,true);assert.ok(out.attendance.check_out);
+ const again=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);assert.equal(again.already,true);
+ const status=await h.api.invokeViral('snapshotAttendance',[],'supabase',user);assert.equal(status.attendance.check_in,first.attendance.check_in);assert.equal(status.attendance.check_out,out.attendance.check_out);
+ assert.equal(h.commits.length,2,'repeated clicks must not create additional commits');
 });

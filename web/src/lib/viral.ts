@@ -6,7 +6,7 @@ import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
 import {withViralWriteRetry} from '../../server/viral/approval-retry.mjs';
 import {versionedStateRead,stateReadFailure,retryStateRead} from '../../server/viral/state-read.mjs';
-import {scopeForMethod,scopeConfig,scopeSelect,scopedState,ReadScopeMiss} from '../../server/viral/state-scopes.mjs';
+import {scopeForMethod,scopeConfig,scopeSelect,scopedState,projectState,ReadScopeMiss} from '../../server/viral/state-scopes.mjs';
 import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
 import {commitWithUploads} from '../../server/viral/commit-uploads.mjs';
 import {avatarResolver} from '../../server/viral/avatar-cache.mjs';
@@ -40,12 +40,23 @@ async function stateQuery(columns:string,retry=true){
 }
 const readSharedViralState=versionedStateRead({
  readVersion:async()=>{const row:any=await stateQuery('version');return row.version;},
- readSnapshot:async(scope:string)=>scope==='full'?readFreshViralState(true):scopedState(await stateQuery(scopeSelect(scope)),scope),
+ readSnapshot:async(scope:string)=>{
+  if(scope==='full')return readFreshViralState(true);
+  try{return scopedState(await stateQuery(scopeSelect(scope),false),scope);}
+  catch(error){
+   // JSON-path projection can time out on a large compressed state document.
+   // Fall back only on database cancellation, never on permissions or missing rows.
+   if((error as any)?.code!=='57014')throw error;
+   console.warn('viral_scoped_read_timeout',{scope});
+   const fresh=await readFreshViralState(true);
+   return {data:projectState(fresh.data,scope),version:fresh.version};
+  }
+ },
 });
 export function invalidateViralState(){readSharedViralState.invalidate();}
 export async function loadViral(options:{share?:boolean;scope?:string}={}){
  if(options.scope&&!options.share)throw Error('Read scopes cannot be used for writes.');
- return {svc:viralService(),...await (options.share?readSharedViralState(options.scope||'full'):readFreshViralState())};
+ return {svc:viralService(),...await (options.share?readSharedViralState(options.scope||'full'):readFreshViralState(true))};
 }
 export function sameOrigin(req:Request){const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)throw Error('Nguồn yêu cầu không hợp lệ.');}
 export const makeEvents=(data:any)=>{
