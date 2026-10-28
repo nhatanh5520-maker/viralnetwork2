@@ -39,5 +39,19 @@ test('late manual refresh error after tab change does not show on attendance',as
 test('opening attendance does not request broad core even if it has never loaded',()=>{
  const start=source.indexOf('function go(next)'),go=source.slice(start,source.indexOf('\n',start));
  const calls=[],ctx={busy:false,approvalPending:false,approvalFocus:null,compactPeoplePickerDismiss:null,tab:'home',formDirty:false,window:{scrollTo(){}},render(){calls.push('render');},refreshSnapshot(manual){calls.push(manual);},loadCore(){throw Error('Unexpected broad load');}};
- vm.createContext(ctx);vm.runInContext(go+";go('attendance')",ctx);assert.deepEqual(calls,['render',true]);
+ vm.createContext(ctx);vm.runInContext(go+";go('attendance')",ctx);assert.deepEqual(calls,['render',undefined]);
+});
+
+test('automatic and forced background attendance refreshes do not show success modals',async()=>{
+ for(const manual of [false,true]){
+  const h=harness();h.ctx.tab='attendance';const request=h.ctx.refreshSnapshot(manual);
+  h.resolve({user:{id:'1',role:'employee'},attendance:{check_in:'saved'}});await request;
+  assert.equal(h.ctx.state.attendance.check_in,'saved');assert.equal(h.messages.length,0);
+ }
+});
+test('explicit refresh button request can still confirm successful refresh',async()=>{
+ const h=harness();h.ctx.tab='attendance';const request=h.ctx.refreshSnapshot(true,true);
+ h.resolve({user:{id:'1',role:'employee'},attendance:{check_in:'saved'}});await request;
+ assert.equal(h.messages.length,1);assert.equal(h.messages[0][0],'Đã cập nhật dữ liệu');
+ assert.match(source,/formDirty=false;refreshSnapshot\(true,true\)/);
 });
