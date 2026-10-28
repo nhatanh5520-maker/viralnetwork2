@@ -2,7 +2,7 @@
 (function(){
  let tracker=new ViralChangeTracker(),client,channel,started=false,connecting=false,connected=false,checking=false,applying=false,flushTimer=null,renewTimer=null,lastCheck=0,lastLegacyRefresh=0,ready=null,stopped=false,failures=0,failureView='',needsProductionCore=false,generation=0,identity='';
  function status(value){document.body.dataset.liveData=value;}
- function canRefresh(){return !!state&&tab!=='booking'&&!document.hidden&&!busy&&!refreshing&&!approvalPending&&!approvalFocus&&!window._operationalTarget&&!screenInteractionActive();}
+ function canRefresh(){return !!state&&!['booking','utilities'].includes(tab)&&!document.hidden&&!busy&&!refreshing&&!approvalPending&&!approvalFocus&&!window._operationalTarget&&!screenInteractionActive();}
  function banner(){
   const pending=tracker.relevant(tab).size,failed=failures>0&&failureView===tab;let box=$('liveDataUpdate');
   if(!state||!pending||!failed&&canRefresh()){box?.remove();return;}

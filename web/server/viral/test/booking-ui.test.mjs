@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {JSDOM} from 'jsdom';
 import {bookingReport} from '../booking-report.mjs';
-const header=['Ngày','Mã Đơn Hàng','Tên Nhãn Hàng','Talent Booking','Doanh Thu Hợp Đồng (VNĐ)','Chi Phí Talent/Quay (VNĐ)','Trạng Thái Booking','Ghi Chú Tiến Độ'];
-const book={cells:[header,['2026-10-29','BK1','Khách A','Dự án A',500000,100000,'Chờ quay','Nội dung'],['2026-11-01','BK2','Khách B','Dự án B',1000000,200000]],readAt:'2026-10-28T01:00:00Z'};
+const header=['Ngày','Mã Đơn Hàng','Tên Nhãn Hàng','Talent Booking','Doanh Thu Hợp Đồng (VNĐ)','Chi Phí Talent/Quay (VNĐ)','Trạng Thái Booking','Ghi Chú Tiến Độ','Trạng Thái Thanh Toán','Sales Phụ Trách','Link Video Final'];
+const book={cells:[header,['2026-10-29','BK1','Khách A','Dự án A',500000,100000,'Chờ quay','Nội dung','Chờ đặt cọc','Sales A','https://example.com/final'],['2026-11-01','BK2','Khách B','Dự án B',1000000,200000]],readAt:'2026-10-28T01:00:00Z'};
 function setup(role='director'){
  const dom=new JSDOM('<div id="screen"></div>',{url:'https://app.test',runScripts:'outside-only'}),w=dom.window,calls=[];w.scrollTo=()=>{};
  w.eval(`var state={user:{id:'1',role:${JSON.stringify(role)}},today:'2026-10-28'},tab='booking',webSessionGeneration=0,formDirty=false;var $=id=>document.getElementById(id);function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}function go(value){tab=value;}`);
@@ -15,8 +15,8 @@ function setup(role='director'){
 test('director sees booking cards, opens order details and returns with filters intact',async()=>{
  const x=setup(),{w}=x;try{
  w.bookingView();await x.tick();assert.equal(x.calls[0].method,'bookingReport');assert.equal(w.document.querySelectorAll('[data-booking-order]').length,1);
- const card=w.document.querySelector('[data-booking-order]');assert.match(card.textContent,/Khách A/);assert.match(card.textContent,/500.000/);card.click();
- assert.ok(w.document.getElementById('bookingBack'));assert.match(w.document.getElementById('screen').textContent,/Chi tiết đơn hàng/);assert.match(w.document.getElementById('screen').textContent,/29\/10\/2026/);
+ const card=w.document.querySelector('[data-booking-order]');assert.match(card.textContent,/Khách A/);assert.match(card.textContent,/500.000/);for(const text of ['Trạng thái booking','Trạng thái thanh toán','Sales phụ trách','Chờ đặt cọc','Sales A'])assert.ok(card.textContent.includes(text));card.click();
+ assert.ok(w.document.getElementById('bookingBack'));assert.match(w.document.getElementById('screen').textContent,/Chi tiết đơn hàng/);assert.equal(w.document.querySelector('a[href="https://example.com/final"]'),null);assert.ok(w.document.getElementById('screen').textContent.includes('Sales A'));assert.match(w.document.getElementById('screen').textContent,/29\/10\/2026/);
  w.document.getElementById('bookingBack').click();assert.equal(w.document.getElementById('bookingMonth').value,'2026-10');
  const mode=w.document.getElementById('bookingMode');mode.value='all';mode.dispatchEvent(new w.Event('change'));w.document.getElementById('bookingApply').click();await x.tick();assert.equal(w.document.querySelectorAll('[data-booking-order]').length,2);
  const project=w.document.getElementById('bookingProject');project.value='Dự án B';project.dispatchEvent(new w.Event('change'));w.document.getElementById('bookingApply').click();await x.tick();assert.equal(w.document.querySelectorAll('[data-booking-order]').length,1);assert.match(w.document.querySelector('[data-booking-order]').textContent,/Khách B/);

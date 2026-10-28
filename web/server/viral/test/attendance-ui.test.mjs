@@ -65,3 +65,11 @@ test('data applied while editing is successful even if redraw is deferred',async
  h.resolve({user:{id:'1',role:'employee'},attendance:{check_in:'saved'}});
  assert.equal(await request,true);assert.equal(h.ctx.state.attendance.check_in,'saved');assert.ok(!h.calls.includes('render'));
 });
+
+test('utilities renders immediately without calling core or snapshot loading',()=>{
+ const start=source.indexOf('function go(next)'),go=source.slice(start,source.indexOf('\n',start));
+ for(const ready of [false,true]){
+  let renders=0;const ctx={busy:false,approvalPending:false,approvalFocus:null,compactPeoplePickerDismiss:null,tab:'home',formDirty:false,coreReady:ready,window:{scrollTo(){}},render(){renders++;},refreshSnapshot(){throw Error('Menu must not load data');},loadCore(){throw Error('Menu must not wait for core');}};
+  vm.createContext(ctx);vm.runInContext(go+";go('utilities')",ctx);assert.equal(ctx.tab,'utilities');assert.equal(renders,1);
+ }
+});

@@ -90,3 +90,7 @@ test('a failed home refresh does not label a deferred attendance refresh as a fa
  w.eval("tab='attendance';refreshSnapshot=async function(){return null;};render();");await x.flush();assert.equal(w.document.getElementById('liveDataUpdate'),null);
  }finally{w.close();}
 });
+
+test('utilities menu receives no business refresh or pending-data banner',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();w.eval("tab='utilities';render();");x.listeners.signal({new:{versions:{settings:3,people:3,attendance:3}}});await x.flush();assert.equal(w.eval('coreCount'),0);assert.equal(w.document.getElementById('liveDataUpdate'),null);}finally{w.close();}
+});
