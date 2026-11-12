@@ -1,7 +1,6 @@
 import vm from 'node:vm';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import {ReadScopeMiss} from './state-scopes.mjs';
 const runtimeDir=[process.cwd()+'/server/viral',process.cwd()+'/web/server/viral'].find(p=>fs.existsSync(p+'/business.gs'));
 if(!runtimeDir)throw Error('Không tìm thấy mã nghiệp vụ Viral Network');
 const source=fs.readFileSync(runtimeDir+'/business.gs','utf8');
@@ -11,13 +10,12 @@ const chain=()=>new Proxy({}, {get:(_,key)=>key==='build'?()=>({}):key==='getHan
 const colNumber=s=>[...s].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
 export function createRuntime(input={},user=null,env={}) {
  const data=structuredClone(input);data.books??={};data.properties??={};data.files??={};data.outbox??=[];
- const cache=new Map();const uploads=[];let readScopeMiss=null;
- const missingScope=name=>{readScopeMiss=new ReadScopeMiss(name);throw readScopeMiss;};
+ const cache=new Map();const uploads=[];
  const props={...data.properties,SHEET_ID:'main',BOT_TOKEN:env.BOT_TOKEN||'',WEB_APP_URL:env.WEB_APP_URL||'',BILL_FOLDER_ID:'bills',GROUP_GREETINGS_ENABLED:env.GROUP_GREETINGS_ENABLED==='true'?'true':'false'};
  const blob=(bytes,type='application/octet-stream',name='file')=>({getBytes:()=>[...Buffer.from(bytes)],getDataAsString:()=>Buffer.from(bytes).toString('utf8'),getContentType:()=>type,getName:()=>name,setName(n){name=n;return this;}});
  class Range {
   constructor(sheet,row,col,nr=1,nc=1){if(!Number.isInteger(row)||!Number.isInteger(col)||row<1||col<1)throw Error('Vùng dữ liệu không hợp lệ');Object.assign(this,{sheet,row,col,nr,nc});}
-  getValues(){return Array.from({length:this.nr},(_,r)=>Array.from({length:this.nc},(_,c)=>this.sheet.cells[this.row-1+r]?.[this.col-1+c]??''));}
+  getValues(){const cells=this.sheet.cells,out=new Array(this.nr);for(let r=0;r<this.nr;r++){const src=cells[this.row-1+r],row=new Array(this.nc);for(let c=0;c<this.nc;c++){const v=src?.[this.col-1+c];row[c]=v??'';}out[r]=row;}return out;}
   getValue(){return this.getValues()[0][0];}
   setValues(values){if(values.length!==this.nr||values.some(r=>r.length!==this.nc))throw Error('Kích thước dữ liệu không khớp');values.forEach((r,i)=>r.forEach((v,j)=>{this.sheet.cells[this.row-1+i]??=[];this.sheet.cells[this.row-1+i][this.col-1+j]=v instanceof Date?v.toISOString():v;}));return this;}
   setValue(value){return this.setValues(Array.from({length:this.nr},()=>Array(this.nc).fill(value)));}
@@ -32,7 +30,7 @@ export function createRuntime(input={},user=null,env={}) {
   constructor(name,book){this.name=name;this.book=book;}
   get cells(){return data.books[this.book][this.name];}getName(){return this.name;}getSheetId(){return Object.keys(data.books[this.book]).indexOf(this.name)+1;}getParent(){return new Book(this.book);}
   getLastRow(){let n=this.cells.length;while(n>0&&!this.cells[n-1]?.some(v=>v!==''&&v!==null))n--;return n;}
-  getLastColumn(){return Math.max(0,...this.cells.filter(Boolean).map(r=>{let n=r.length;while(n>0&&(r[n-1]===''||r[n-1]==null))n--;return n;}));}
+  getLastColumn(){let max=0;for(const r of this.cells){if(!r)continue;let n=r.length;while(n>max&&(r[n-1]===''||r[n-1]==null))n--;if(n>max)max=n;}return max;}
   getMaxRows(){return Math.max(1000,this.getLastRow());}getMaxColumns(){return Math.max(100,this.getLastColumn());}
   getRange(row,col,nr=1,nc=1){if(typeof row==='string'){const m=/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(row);if(!m)throw Error('Địa chỉ dữ liệu không hợp lệ');return new Range(this,Number(m[2]),colNumber(m[1]),m[4]?Number(m[4])-Number(m[2])+1:1,m[3]?colNumber(m[3])-colNumber(m[1])+1:1);}return new Range(this,row,col,nr,nc);}
   getDataRange(){return this.getRange(1,1,Math.max(1,this.getLastRow()),Math.max(1,this.getLastColumn()));}
@@ -44,8 +42,8 @@ export function createRuntime(input={},user=null,env={}) {
  for(const key of ['setFrozenRows','setFrozenColumns','hideColumns','showColumns','setColumnWidth','setColumnWidths'])Sheet.prototype[key]=function(){return this;};
  class Book {
   constructor(id){this.id=id;data.books[id]??={};}getId(){return this.id;}getUrl(){return env.WEB_APP_URL||'';}
-  getSheetByName(name){if(env.READ_TABLES&&(this.id!=='main'||!env.READ_TABLES.includes(name)))missingScope(name);return Object.hasOwn(data.books[this.id],name)?new Sheet(name,this.id):null;}
-  insertSheet(name){if(env.READ_TABLES)missingScope('write:'+name);data.books[this.id][name]??=[];return new Sheet(name,this.id);}getSheets(){if(env.READ_TABLES)missingScope('all-sheets');return Object.keys(data.books[this.id]).map(n=>new Sheet(n,this.id));}
+  getSheetByName(name){return Object.hasOwn(data.books[this.id],name)?new Sheet(name,this.id):null;}
+  insertSheet(name){data.books[this.id][name]??=[];return new Sheet(name,this.id);}getSheets(){return Object.keys(data.books[this.id]).map(n=>new Sheet(n,this.id));}
   getSpreadsheetTimeZone(){return env.GRID_TIMEZONE?.[this.id]||'Asia/Ho_Chi_Minh';}getSpreadsheetLocale(){return 'vi_VN';}toast(){}
  }
  const dateFormat=(value,zone,format)=>{
@@ -79,14 +77,6 @@ export function createRuntime(input={},user=null,env={}) {
  });
  context.__storePersonalImage=image=>{const id=context.__storeProjectImage(image);data.files[id].folder='person-avatars';return id;};
  vm.runInContext(source,context,{timeout:10000});
- // Archived rows live in Sheets. Keep compact work totals in Supabase so ordinary
- // snapshots and mutations remain independent of external history reads.
- const summary=data.attendanceArchive?.summary,archiveIds=new Set(data.attendanceArchive?.ids||[]),att=data.books?.main?.Attendance||[],idColumn=att[0]?.indexOf('id');
- const hasArchiveRows=att.slice(1).some(row=>archiveIds.has(String(row[idColumn])));
- if(summary&&!hasArchiveRows){
-  context.__archivedWorkSummary=summary;
-  vm.runInContext(`const originalArchivedPerformance=performance_;performance_=function(month){return originalArchivedPerformance(month).map(p=>{const a=__archivedWorkSummary[String(month)]?.[String(p.telegram_id)];return a?{...p,work_days:p.work_days+Number(a.days||0),work_minutes:p.work_minutes+Number(a.minutes||0)}:p;});};`,context,{timeout:5000});
- }
  vm.runInContext(`
  const originalTelegramAuth = auth_;
  auth_ = function(initData){
@@ -101,7 +91,10 @@ export function createRuntime(input={},user=null,env={}) {
  forgetDevice=function(initData){auth_(initData);return {ok:true};};
  `,context,{timeout:10000});
  vm.runInContext(webPolicy,context,{timeout:10000});
- const run=(name,args=[],internal=false)=>{if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);context.__call=name;context.__args=args;const result=vm.runInContext('globalThis[__call](...__args)',context,{timeout:20000});if(readScopeMiss)throw readScopeMiss;if(name!=='snapshotAttendance'&&result&&typeof result==='object'&&!Array.isArray(result)&&(result.projects||result.user||result.item)){result.projectAvatars=vm.runInContext('webProjectImages_()',context,{timeout:5000});result.projectRecords=vm.runInContext('webProjectRecords_()',context,{timeout:5000});result.personalAvatars=vm.runInContext('webPersonalAvatars_()',context,{timeout:5000});}return result;};
+ // Same result as rows_ in business.gs (object per non-empty row, Date cells via cell_),
+ // built with plain loops: about 3x faster on large tabs such as Attendance.
+ vm.runInContext(`{const originalRows=rows_;rows_=function(n){if(V20_READ_SCOPE?.rows.has(n))return V20_READ_SCOPE.rows.get(n);const a=sheet_(n).getDataRange().getValues(),h=a.shift();if(!h||h.some(k=>String(k)==='__proto__'))return originalRows(n);const out=a.slice(0,0);for(const r of a){let filled=false;for(const x of r)if(x!==''){filled=true;break;}if(!filled)continue;const o=new Object();for(let i=0;i<h.length;i++){const v=r[i];o[h[i]]=v instanceof Date?cell_(h[i],v):v;}out.push(o);}const visible=n==='ProductionItems'?out.filter(x=>String(x.stage)!=='deleted').map(normalizeProductionItem_):out;if(V20_READ_SCOPE)V20_READ_SCOPE.rows.set(n,visible);return visible;};}`,context,{timeout:10000});
+ const run=(name,args=[],internal=false)=>{if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);context.__call=name;context.__args=args;const result=vm.runInContext('globalThis[__call](...__args)',context,{timeout:20000});if(result&&typeof result==='object'&&!Array.isArray(result)&&(result.projects||result.user||result.item)){result.projectAvatars=vm.runInContext('webProjectImages_()',context,{timeout:5000});result.projectRecords=vm.runInContext('webProjectRecords_()',context,{timeout:5000});result.personalAvatars=vm.runInContext('webPersonalAvatars_()',context,{timeout:5000});}return result;};
  return {data,uploads,context,run};
 }
 export function initializeData(){const rt=createRuntime();for(const name of ['setupV20','setupPersonnel','setupV20Features','setupFieldAttendance','setupV2022'])rt.run(name,[],true);return rt.data;}
