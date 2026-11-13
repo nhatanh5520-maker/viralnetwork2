@@ -11,6 +11,7 @@ import {versionedStateRead,stateReadFailure,retryStateRead} from '../../server/v
 import {scopeForMethod,scopeConfig,scopeSelect,scopedState,projectState,ReadScopeMiss} from '../../server/viral/state-scopes.mjs';
 import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
 import {commitWithUploads} from '../../server/viral/commit-uploads.mjs';
+import {commitChanges} from '../../server/viral/patch-commit.mjs';
 import {avatarResolver} from '../../server/viral/avatar-cache.mjs';
 import {loadAttendanceArchive,overlayAttendance} from '../../server/viral/attendance-archive.mjs';
 export function viralService(){
@@ -72,6 +73,11 @@ export const makeEvents=(data:any)=>{
  return events;
 };
 const queuedAttendance=attendanceQueue();
+// Sheets these methods may save row-by-row. They read/modify only the caller's own row (found by
+// telegram_id + date), so concurrent check-ins by different people merge instead of conflicting.
+// The unique columns stop the same person getting two rows for one day (e.g. two devices at once).
+const attendanceRows={'books/main/Attendance':['telegram_id','date'],'books/main/Notifications':['event_key']};
+const ROW_MERGE:Record<string,Record<string,string[]>>={attendance:attendanceRows,fieldAttendance:attendanceRows,overtime:{'books/main/Overtime':['telegram_id','date']}};
 export async function invokeViral(method:string,args:any[],initData:string,user:any){
  return queuedAttendance(method,()=>withViralWriteRetry(method,()=>invokeViralAttempt(method,args,initData,user)));
 }
@@ -143,11 +149,16 @@ async function invokeViralOnce(method:string,args:any[],initData:string,user:any
   if(rt.uploads.length||JSON.stringify(rt.data)!==JSON.stringify(data))throw new ReadScopeMiss('side-effect');
   return result;
  }
- if(JSON.stringify(rt.data)!==JSON.stringify(data)){
+ // Save only what changed: whole sheets for most methods, single rows for check-in/out.
+ const changes=rt.changes(data,{rowMerge:ROW_MERGE[method]||{}});
+ const knownOutbox=new Set((data.outbox||[]).map((x:any)=>String(x?.id)));
+ const queued=(rt.data.outbox||[]).some((x:any)=>!knownOutbox.has(String(x?.id)));
+ if(changes.patches.length||queued||rt.uploads.length){
   await commitWithUploads({uploads:rt.uploads,
    upload:(file:any)=>svc.storage.from('viral-files').upload(file.id,file.bytes,{contentType:file.type,upsert:false}),
    remove:async(ids:string[])=>{const {error}=await svc.storage.from('viral-files').remove(ids);if(error)throw error;},
-   commit:()=>svc.rpc('viral_commit',{expected_version:version,new_data:rt.data,events:makeEvents(rt.data)})
+   commit:()=>commitChanges({rpc:(name:string,params:any)=>svc.rpc(name,params),version,changes,events:makeEvents(rt.data),fullData:()=>rt.data,
+    onFallback:()=>console.warn('viral_commit_patch missing: run supabase/viral-fast-commit.sql')})
   });
   readSharedViralState.invalidate();
  }

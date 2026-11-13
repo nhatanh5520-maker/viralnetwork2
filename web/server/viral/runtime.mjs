@@ -7,21 +7,107 @@ if(!runtimeDir)throw Error('Không tìm thấy mã nghiệp vụ Viral Network')
 const source=fs.readFileSync(runtimeDir+'/business.gs','utf8');
 const webPolicy=fs.readFileSync(runtimeDir+'/web-policy.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/payment-batches.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/project-management.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/personal-avatars.gs','utf8');
 const allowed=new Set(JSON.parse(fs.readFileSync(runtimeDir+'/methods.json','utf8')));
+const webGlue=`
+ const originalTelegramAuth = auth_;
+ auth_ = function(initData){
+  if(__user){const p=rows_('Employees').find(p=>String(p.telegram_id)===String(__user.employeeId)&&String(p.active).toLowerCase()==='true');if(!p)throw Error('Tài khoản chưa được kích hoạt');return {id:String(p.telegram_id),name:String(p.name),role:role_(p.role),department:String(p.department||'')};}
+  if(typeof initData!=='string'||initData.startsWith('v'))throw Error('Cần đăng nhập');return originalTelegramAuth(initData);
+ };
+ const webFieldBuildPoint=fieldBuildPoint_;
+ fieldBuildPoint_=function(u,input,date,now){const point=webFieldBuildPoint(u,input,date,now);if(point.mode==='office')point.place=String(setting_('office_name')||'Văn phòng');return point;};
+ dispatchNotifications=function(){return {ok:true,queued:true};};
+ tgSend_=function(chatId,text){return __enqueue(chatId,text);};
+ rememberDevice=function(initData){auth_(initData);return {ok:true};};
+ forgetDevice=function(initData){auth_(initData);return {ok:true};};
+ // Same result as business.gs rows_, without allocating an entries array per row (hot path on large
+ // sheets). Host constructors keep the prototypes the original produced.
+ const businessRows=rows_;
+ rows_=function(n){
+  if(V20_READ_SCOPE?.rows.has(n))return V20_READ_SCOPE.rows.get(n);
+  const a=sheet_(n).getDataRange().getValues(),h=a.shift();
+  if(!h||h.some(k=>String(k)==='__proto__')){a.unshift(h);return businessRows(n);}
+  const out=new Array();
+  for(const r of a){let filled=false;for(let i=0;i<r.length;i++)if(r[i]!==''){filled=true;break;}if(!filled)continue;const o=new Object();for(let i=0;i<h.length;i++)o[h[i]]=cell_(h[i],r[i]);out.push(o);}
+  const visible=n==='ProductionItems'?out.filter(x=>String(x.stage)!=='deleted').map(normalizeProductionItem_):out;
+  if(V20_READ_SCOPE)V20_READ_SCOPE.rows.set(n,visible);return visible;
+ };
+`;
+// Parse/compile the ~300KB business source once per process instead of on every request.
+const businessScript=new vm.Script(source,{filename:'business.gs'}),webGlueScript=new vm.Script(webGlue,{filename:'web-glue.js'}),webPolicyScript=new vm.Script(webPolicy,{filename:'web-policy.gs'});
+// State keys for sheet-level optimistic concurrency (see supabase/viral-fast-commit.sql).
+// K = "the whole value at this path"; K+'#rows' = "row-level changes to this sheet".
+export const stateKey=path=>path.map(p=>encodeURIComponent(String(p))).join('/');
+const same=(a,b)=>a===b||JSON.stringify(a)===JSON.stringify(b);
+/**
+ * Express a sheet change as row operations: updates of existing rows (matched by the id in column A)
+ * and appended rows. Returns null when that is not possible (header edits, deletions, reordering,
+ * rows without a unique id); the whole sheet is then written instead.
+ */
+export function sheetRowOps(before,after,uniqueNames=[]){
+ if(!Array.isArray(before)||!Array.isArray(after)||!before.length||after.length<before.length||!same(before[0],after[0]))return null;
+ const header=before[0].map(String),unique=uniqueNames.map(n=>header.indexOf(n));
+ if(unique.some(i=>i<0))return null;
+ const ids=new Set(),update=[],append=[];
+ for(let i=1;i<before.length;i++){
+  const id=String(before[i]?.[0]??'');
+  if(same(before[i],after[i])){if(id)ids.add(id);continue;}
+  if(!id||ids.has(id)||String(after[i]?.[0]??'')!==id)return null;
+  ids.add(id);update.push({id,base:before[i],row:after[i]});
+ }
+ for(let i=before.length;i<after.length;i++){if(!String(after[i]?.[0]??''))return null;append.push(after[i]);}
+ if(update.length&&new Set(before.slice(1).map(r=>String(r?.[0]??''))).size!==before.length-1)return null;
+ return {update,append,unique};
+}
+/**
+ * Minimal patch between the loaded state and the state after a business call. Only sheets the call
+ * opened are compared. `rowMerge` ({'books/main/Attendance':['telegram_id','date']}) saves listed sheets
+ * as row operations so two people checking in at once do not conflict.
+ * Returns {reads, writes, patches, outboxDone}; pending outbox entries leave the JSON state once they
+ * are inserted into viral_outbox as events.
+ */
+export function diffState(base,next,touched=null,{rowMerge={}}={}){
+ const reads=new Set(),writes=new Set(),patches=[];
+ const put=(path,value)=>{const key=stateKey(path);reads.add(key);writes.add(key);patches.push({path,value:value===undefined?null:value,remove:value===undefined});};
+ const baseBooks=base.books||{},nextBooks=next.books||{};
+ for(const book of new Set([...Object.keys(baseBooks),...Object.keys(nextBooks)])){
+  if(!baseBooks[book]||!nextBooks[book]){if(!same(baseBooks[book],nextBooks[book])){put(['books',book],nextBooks[book]);for(const sheet of Object.keys(nextBooks[book]||baseBooks[book]||{})){const k=stateKey(['books',book,sheet]);reads.add(k).add(k+'#rows');writes.add(k);}}continue;}
+  const names=touched?[...touched].filter(t=>t.book===book).map(t=>t.name):[...new Set([...Object.keys(baseBooks[book]),...Object.keys(nextBooks[book])])];
+  for(const name of new Set([...names,...Object.keys(nextBooks[book]).filter(n=>!Object.hasOwn(baseBooks[book],n))])){
+   const path=['books',book,name],key=stateKey(path),before=baseBooks[book][name],after=nextBooks[book][name];
+   const merge=Object.hasOwn(rowMerge,key);
+   reads.add(key);if(!merge)reads.add(key+'#rows');
+   if(same(before,after))continue;
+   const ops=merge?sheetRowOps(before,after,rowMerge[key]):null;
+   if(ops){writes.add(key+'#rows');patches.push({path,rows:ops});}
+   else{reads.add(key+'#rows');put(path,after);}
+  }
+ }
+ const baseFiles=base.files||{},nextFiles=next.files||{};
+ for(const id of new Set([...Object.keys(baseFiles),...Object.keys(nextFiles)]))if(!same(baseFiles[id],nextFiles[id]))put(['files',id],nextFiles[id]);
+ if(!same(base.properties||{},next.properties||{}))put(['properties'],next.properties||{});
+ for(const key of new Set([...Object.keys(base),...Object.keys(next)])){
+  if(['books','files','properties','outbox'].includes(key))continue;
+  if(!same(base[key],next[key]))put([key],next[key]);
+ }
+ const pending=(next.outbox||[]).filter(x=>x&&x.status==='pending');
+ return {reads:[...reads],writes:[...writes],patches,outboxDone:pending.map(x=>String(x.id))};
+}
 const chain=()=>new Proxy({}, {get:(_,key)=>key==='build'?()=>({}):key==='getHandlerFunction'?()=> '':()=>chain()});
 const colNumber=s=>[...s].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
 export function createRuntime(input={},user=null,env={}) {
  const data=structuredClone(input);data.books??={};data.properties??={};data.files??={};data.outbox??=[];
- const cache=new Map();const uploads=[];let readScopeMiss=null;
+ const cache=new Map();const uploads=[];let readScopeMiss=null;const touched=new Map();
  const missingScope=name=>{readScopeMiss=new ReadScopeMiss(name);throw readScopeMiss;};
  const props={...data.properties,SHEET_ID:'main',BOT_TOKEN:env.BOT_TOKEN||'',WEB_APP_URL:env.WEB_APP_URL||'',BILL_FOLDER_ID:'bills',GROUP_GREETINGS_ENABLED:env.GROUP_GREETINGS_ENABLED==='true'?'true':'false'};
  const blob=(bytes,type='application/octet-stream',name='file')=>({getBytes:()=>[...Buffer.from(bytes)],getDataAsString:()=>Buffer.from(bytes).toString('utf8'),getContentType:()=>type,getName:()=>name,setName(n){name=n;return this;}});
  class Range {
   constructor(sheet,row,col,nr=1,nc=1){if(!Number.isInteger(row)||!Number.isInteger(col)||row<1||col<1)throw Error('Vùng dữ liệu không hợp lệ');Object.assign(this,{sheet,row,col,nr,nc});}
-  getValues(){return Array.from({length:this.nr},(_,r)=>Array.from({length:this.nc},(_,c)=>this.sheet.cells[this.row-1+r]?.[this.col-1+c]??''));}
+  // Read the sheet once per call: going through the `cells` getter per cell dominated request time.
+  getValues(){const cells=this.sheet.cells,out=new Array(this.nr);for(let r=0;r<this.nr;r++){const src=cells[this.row-1+r],row=new Array(this.nc);for(let c=0;c<this.nc;c++)row[c]=src?.[this.col-1+c]??'';out[r]=row;}return out;}
   getValue(){return this.getValues()[0][0];}
-  setValues(values){if(values.length!==this.nr||values.some(r=>r.length!==this.nc))throw Error('Kích thước dữ liệu không khớp');values.forEach((r,i)=>r.forEach((v,j)=>{this.sheet.cells[this.row-1+i]??=[];this.sheet.cells[this.row-1+i][this.col-1+j]=v instanceof Date?v.toISOString():v;}));return this;}
+  setValues(values){if(values.length!==this.nr||values.some(r=>r.length!==this.nc))throw Error('Kích thước dữ liệu không khớp');const cells=this.sheet.cells;values.forEach((r,i)=>{const row=cells[this.row-1+i]??=[];r.forEach((v,j)=>{row[this.col-1+j]=v instanceof Date?v.toISOString():v;});});return this;}
   setValue(value){return this.setValues(Array.from({length:this.nr},()=>Array(this.nc).fill(value)));}
-  clearContent(){for(let r=0;r<this.nr;r++)for(let c=0;c<this.nc;c++)if(this.sheet.cells[this.row-1+r])this.sheet.cells[this.row-1+r][this.col-1+c]='';return this;}
+  clearContent(){const cells=this.sheet.cells;for(let r=0;r<this.nr;r++)for(let c=0;c<this.nc;c++)if(cells[this.row-1+r])cells[this.row-1+r][this.col-1+c]='';return this;}
   clearContents(){return this.clearContent();}getRow(){return this.row;}getColumn(){return this.col;}getNumRows(){return this.nr;}getNumColumns(){return this.nc;}getSheet(){return this.sheet;}
   getA1Notation(){return `${this.row}:${this.col}`;}getFormula(){return this.getFormulas()[0][0];}getFormulas(){const meta=env.GRID_META?.[this.sheet.book]?.[this.sheet.name];return this.getValues().map((r,i)=>r.map((v,j)=>meta?.formulas?.[this.row-1+i]?.[this.col-1+j]||''));}setFormula(){return this;}
   getDataValidation(){return null;}getRichTextValues(){const meta=env.GRID_META?.[this.sheet.book]?.[this.sheet.name];return this.getValues().map((r,i)=>r.map((v,j)=>{const links=meta?.links?.[this.row-1+i]?.[this.col-1+j]||[];return {getText:()=>String(v),getLinkUrl:()=>links[0]||null,getRuns:()=>links.map(url=>({getLinkUrl:()=>url}))};}));}
@@ -29,15 +115,16 @@ export function createRuntime(input={},user=null,env={}) {
  }
  for(const key of ['setDataValidation','clearDataValidations','clearNote','setNote','setNumberFormat','setFontWeight','setBackground'])Range.prototype[key]=function(){return this;};
  class Sheet {
-  constructor(name,book){this.name=name;this.book=book;}
-  get cells(){return data.books[this.book][this.name];}getName(){return this.name;}getSheetId(){return Object.keys(data.books[this.book]).indexOf(this.name)+1;}getParent(){return new Book(this.book);}
-  getLastRow(){let n=this.cells.length;while(n>0&&!this.cells[n-1]?.some(v=>v!==''&&v!==null))n--;return n;}
-  getLastColumn(){return Math.max(0,...this.cells.filter(Boolean).map(r=>{let n=r.length;while(n>0&&(r[n-1]===''||r[n-1]==null))n--;return n;}));}
+  constructor(name,book){this.name=name;this.book=book;this.key=book+'\u0000'+name;}
+  // Every read and write of sheet content goes through this getter, which records the sheet for diffState.
+  get cells(){if(!touched.has(this.key))touched.set(this.key,{book:this.book,name:this.name});return data.books[this.book][this.name];}getName(){return this.name;}getSheetId(){return Object.keys(data.books[this.book]).indexOf(this.name)+1;}getParent(){return new Book(this.book);}
+  getLastRow(){const cells=this.cells;let n=cells.length;while(n>0&&!cells[n-1]?.some(v=>v!==''&&v!==null))n--;return n;}
+  getLastColumn(){let max=0;for(const r of this.cells){if(!r)continue;let n=r.length;while(n>max&&(r[n-1]===''||r[n-1]==null))n--;if(n>max)max=n;}return max;}
   getMaxRows(){return Math.max(1000,this.getLastRow());}getMaxColumns(){return Math.max(100,this.getLastColumn());}
   getRange(row,col,nr=1,nc=1){if(typeof row==='string'){const m=/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(row);if(!m)throw Error('Địa chỉ dữ liệu không hợp lệ');return new Range(this,Number(m[2]),colNumber(m[1]),m[4]?Number(m[4])-Number(m[2])+1:1,m[3]?colNumber(m[3])-colNumber(m[1])+1:1);}return new Range(this,row,col,nr,nc);}
   getDataRange(){return this.getRange(1,1,Math.max(1,this.getLastRow()),Math.max(1,this.getLastColumn()));}
   appendRow(row){this.cells.push([...row]);return this;}deleteRow(row){this.cells.splice(row-1,1);return this;}
-  clear(){data.books[this.book][this.name]=[];return this;}clearContents(){return this.clear();}getFilter(){return this.filter||null;}
+  clear(){this.cells;data.books[this.book][this.name]=[];return this;}clearContents(){return this.clear();}getFilter(){return this.filter||null;}
   insertRowsAfter(after,count){this.cells.splice(after,0,...Array.from({length:count},()=>[]));return this;}
   insertColumnsAfter(after,count){this.cells.forEach(r=>r.splice(after,0,...Array(count).fill('')));return this;}
  }
@@ -78,7 +165,7 @@ export function createRuntime(input={},user=null,env={}) {
   __user:user,__enqueue:(chatId,text)=>{if(!chatId)return false;data.outbox.push({id:crypto.randomUUID(),chatId:String(chatId),text:String(text),status:'pending',createdAt:new Date().toISOString()});return true;}
  });
  context.__storePersonalImage=image=>{const id=context.__storeProjectImage(image);data.files[id].folder='person-avatars';return id;};
- vm.runInContext(source,context,{timeout:10000});
+ businessScript.runInContext(context,{timeout:10000});
  // Archived rows live in Sheets. Keep compact work totals in Supabase so ordinary
  // snapshots and mutations remain independent of external history reads.
  const summary=data.attendanceArchive?.summary,archiveIds=new Set(data.attendanceArchive?.ids||[]),att=data.books?.main?.Attendance||[],idColumn=att[0]?.indexOf('id');
@@ -87,21 +174,11 @@ export function createRuntime(input={},user=null,env={}) {
   context.__archivedWorkSummary=summary;
   vm.runInContext(`const originalArchivedPerformance=performance_;performance_=function(month){return originalArchivedPerformance(month).map(p=>{const a=__archivedWorkSummary[String(month)]?.[String(p.telegram_id)];return a?{...p,work_days:p.work_days+Number(a.days||0),work_minutes:p.work_minutes+Number(a.minutes||0)}:p;});};`,context,{timeout:5000});
  }
- vm.runInContext(`
- const originalTelegramAuth = auth_;
- auth_ = function(initData){
-  if(__user){const p=rows_('Employees').find(p=>String(p.telegram_id)===String(__user.employeeId)&&String(p.active).toLowerCase()==='true');if(!p)throw Error('Tài khoản chưa được kích hoạt');return {id:String(p.telegram_id),name:String(p.name),role:role_(p.role),department:String(p.department||'')};}
-  if(typeof initData!=='string'||initData.startsWith('v'))throw Error('Cần đăng nhập');return originalTelegramAuth(initData);
- };
- const webFieldBuildPoint=fieldBuildPoint_;
- fieldBuildPoint_=function(u,input,date,now){const point=webFieldBuildPoint(u,input,date,now);if(point.mode==='office')point.place=String(setting_('office_name')||'Văn phòng');return point;};
- dispatchNotifications=function(){return {ok:true,queued:true};};
- tgSend_=function(chatId,text){return __enqueue(chatId,text);};
- rememberDevice=function(initData){auth_(initData);return {ok:true};};
- forgetDevice=function(initData){auth_(initData);return {ok:true};};
- `,context,{timeout:10000});
- vm.runInContext(webPolicy,context,{timeout:10000});
+ webGlueScript.runInContext(context,{timeout:10000});
+ webPolicyScript.runInContext(context,{timeout:10000});
+ touched.clear();
  const run=(name,args=[],internal=false)=>{if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);context.__call=name;context.__args=args;const result=vm.runInContext('globalThis[__call](...__args)',context,{timeout:20000});if(readScopeMiss)throw readScopeMiss;if(name!=='snapshotAttendance'&&result&&typeof result==='object'&&!Array.isArray(result)&&(result.projects||result.user||result.item)){result.projectAvatars=vm.runInContext('webProjectImages_()',context,{timeout:5000});result.projectRecords=vm.runInContext('webProjectRecords_()',context,{timeout:5000});result.personalAvatars=vm.runInContext('webPersonalAvatars_()',context,{timeout:5000});}return result;};
- return {data,uploads,context,run};
+ const changes=(base,options)=>diffState(base,data,touched.values(),options);
+ return {data,uploads,context,run,changes};
 }
 export function initializeData(){const rt=createRuntime();for(const name of ['setupV20','setupPersonnel','setupV20Features','setupFieldAttendance','setupV2022'])rt.run(name,[],true);return rt.data;}
