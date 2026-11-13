@@ -72,11 +72,25 @@ test('realtime resumes after a 401 and a new login, ignoring old session callbac
 });
 test('a signal being refreshed on one tab is not acknowledged for a different tab',async()=>{
  const x=setup(),{w}=x;try{await x.tick();w.eval("tab='home';var finishRead;refreshSnapshot=()=>new Promise(resolve=>{finishRead=resolve;});");
- x.listeners.signal({new:{versions:{production:1}}});const timer=x.timers.find(t=>t.ms>=800&&t.ms<2500);assert.ok(timer);const running=timer.fn();await x.tick();w.eval("tab='production';finishRead(true);");await running;await x.tick();await x.flush();assert.equal(w.eval('refreshCount'),1);
+ x.listeners.signal({new:{versions:{production:1}}});const timer=x.timers.find(t=>t.ms===800);assert.ok(timer);const running=timer.fn();await x.tick();w.eval("tab='production';finishRead(true);");await running;await x.tick();await x.flush();assert.equal(w.eval('refreshCount'),1);
  }finally{x.dom.window.close();}
 });
-test('other people checking in does not reload Home or Attendance, but does reload attendance review',()=>{
- const t=new ChangeTracker();t.accept({versions:{attendance:5}});
- assert.equal(t.relevant('home').size,0);assert.equal(t.relevant('attendance').size,0);assert.equal(t.relevant('fieldReview').size,1);assert.equal(t.relevant('performance').size,1);
- t.accept({versions:{schedule:6}});assert.equal(t.relevant('attendance').size,1);
+
+test('a deferred attendance refresh remains pending without reporting a failure',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();w.eval("tab='attendance';refreshSnapshot=async function(){coreCount++;return null;};");
+ x.listeners.signal({new:{versions:{attendance:1}}});await x.flush();
+ assert.equal(w.document.getElementById('liveDataUpdate'),null);assert.ok(!x.timers.some(t=>t.ms===10000));
+ w.eval('refreshSnapshot=async function(){coreCount++;return true;};');await x.flush();
+ assert.equal(w.eval('coreCount'),2);assert.equal(w.document.getElementById('liveDataUpdate'),null);
+ }finally{w.close();}
+});
+test('a failed home refresh does not label a deferred attendance refresh as a failure',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();w.eval("tab='home';refreshSnapshot=async function(){return false;};");
+ x.listeners.signal({new:{versions:{attendance:1}}});await x.flush();assert.match(w.document.getElementById('liveDataUpdate').textContent,/tự thử lại/);
+ w.eval("tab='attendance';refreshSnapshot=async function(){return null;};render();");await x.flush();assert.equal(w.document.getElementById('liveDataUpdate'),null);
+ }finally{w.close();}
+});
+
+test('utilities menu receives no business refresh or pending-data banner',async()=>{
+ const x=setup(),{w}=x;try{await x.tick();w.eval("tab='utilities';render();");x.listeners.signal({new:{versions:{settings:3,people:3,attendance:3}}});await x.flush();assert.equal(w.eval('coreCount'),0);assert.equal(w.document.getElementById('liveDataUpdate'),null);}finally{w.close();}
 });

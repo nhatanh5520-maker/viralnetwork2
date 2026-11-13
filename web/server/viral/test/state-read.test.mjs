@@ -36,3 +36,16 @@ test('cancelled reads stop after one retry; write paths and other errors never r
  const {retryStateRead}=await import('../state-read.mjs');
  for(const [retry,code,expected] of [[true,'57014',2],[false,'57014',1],[true,'42501',1],[true,'PGRST116',1],[true,'STATE_READ',1]]){let calls=0;await assert.rejects(retryStateRead(async()=>{calls++;throw stateReadFailure({code});},{retry,pause:async()=>{}}),e=>e.code===code);assert.equal(calls,expected);}
 });
+
+test('known transient network, abort and HTTP read failures retry once without exposing raw details',async()=>{
+ const {retryStateRead,retryableStateRead}=await import('../state-read.mjs');
+ for(const error of [{message:'TypeError: fetch failed',details:'private-url-and-key'},new DOMException('The operation was aborted','AbortError'),new DOMException('Time limit exceeded','TimeoutError'),{message:'upstream failed',httpStatus:503},{code:'ECONNRESET'}]){
+  let calls=0;const result=await retryStateRead(async()=>{calls++;if(calls===1)throw error;return 'fresh';},{retry:true,pause:async()=>{}});assert.equal(result,'fresh');assert.equal(calls,2);assert.equal(retryableStateRead(error),true);
+  const failure=stateReadFailure(error,'main');assert.doesNotMatch(failure.message,/private-url-and-key|upstream failed/);assert.equal(failure.stage,'main');assert.equal(stateReadFailure(failure),failure);
+ }
+ for(const error of [{message:'Unexpected invalid JSON'},{code:'42501'},{code:'PGRST116'},{code:'PGRST301'}])assert.equal(retryableStateRead(error),false);
+});
+test('persistent transient read errors stop after two attempts; retries remain opt-in',async()=>{
+ const {retryStateRead}=await import('../state-read.mjs');
+ for(const retry of [false,true]){let calls=0;await assert.rejects(retryStateRead(async()=>{calls++;throw {message:'TypeError: fetch failed'};},{retry,pause:async()=>{}}));assert.equal(calls,retry?2:1);}
+});
