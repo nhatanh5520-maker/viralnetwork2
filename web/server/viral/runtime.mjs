@@ -1,6 +1,7 @@
 import vm from 'node:vm';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import {ReadScopeMiss} from './state-scopes.mjs';
 const runtimeDir=[process.cwd()+'/server/viral',process.cwd()+'/web/server/viral'].find(p=>fs.existsSync(p+'/business.gs'));
 if(!runtimeDir)throw Error('Không tìm thấy mã nghiệp vụ Viral Network');
 const source=fs.readFileSync(runtimeDir+'/business.gs','utf8');
@@ -18,36 +19,29 @@ const webGlue=`
  tgSend_=function(chatId,text){return __enqueue(chatId,text);};
  rememberDevice=function(initData){auth_(initData);return {ok:true};};
  forgetDevice=function(initData){auth_(initData);return {ok:true};};
- // Same result as business.gs rows_, without allocating an entries array per row (hot path on large sheets).
+ // Same result as business.gs rows_, without allocating an entries array per row (hot path on large
+ // sheets). Host constructors keep the prototypes the original produced.
  const businessRows=rows_;
  rows_=function(n){
   if(V20_READ_SCOPE?.rows.has(n))return V20_READ_SCOPE.rows.get(n);
   const a=sheet_(n).getDataRange().getValues(),h=a.shift();
   if(!h||h.some(k=>String(k)==='__proto__')){a.unshift(h);return businessRows(n);}
-  // Host constructors (passed into the context) keep the same prototypes the original produced.
   const out=new Array();
   for(const r of a){let filled=false;for(let i=0;i<r.length;i++)if(r[i]!==''){filled=true;break;}if(!filled)continue;const o=new Object();for(let i=0;i<h.length;i++)o[h[i]]=cell_(h[i],r[i]);out.push(o);}
   const visible=n==='ProductionItems'?out.filter(x=>String(x.stage)!=='deleted').map(normalizeProductionItem_):out;
   if(V20_READ_SCOPE)V20_READ_SCOPE.rows.set(n,visible);return visible;
  };
- `;
+`;
 // Parse/compile the ~300KB business source once per process instead of on every request.
-const scripts=[new vm.Script(source,{filename:'business.gs'}),new vm.Script(webGlue,{filename:'web-glue.js'}),new vm.Script(webPolicy,{filename:'web-policy.gs'})];
-const callScript=new vm.Script('globalThis[__call](...__args)');
-// Decorations run in one business read scope so Projects/ProductionItems/Employees are converted once.
-const decorateScript=new vm.Script('readScope_(()=>[webProjectImages_(),webProjectRecords_(),webPersonalAvatars_()])');
-// Methods that only read. The whole call (and its decorations) shares one business read scope, the
-// mechanism business.gs already uses inside snapshots, so each sheet is converted to rows once.
-export const READ_ONLY_METHODS=new Set(['snapshotHome','snapshotCore','snapshotManager','productionPage','productionScreen','reviewQueue','staffProductionWorkload','attendanceStatus','managerAttendanceDay','personnelPerformance','equipmentProjectOptions','fieldAttendanceOptions','fieldReviewData','fieldConfig','fieldAttendanceReport','expenseProductionOptions','deletedProductionIdeas','personnelDirectory','accountingExpenses']);
-const readScopeCallScript=new vm.Script('readScope_(()=>{const result=globalThis[__call](...__args);__result=result;return __decorate&&result&&typeof result==="object"&&!Array.isArray(result)&&(result.projects||result.user||result.item)?[webProjectImages_(),webProjectRecords_(),webPersonalAvatars_()]:null;})');
-// State keys used for sheet-level optimistic concurrency. Segments are URI-encoded so '/' is unambiguous.
-// A key K means "the whole value at this path"; K+'#rows' means "row-level changes to this sheet".
+const businessScript=new vm.Script(source,{filename:'business.gs'}),webGlueScript=new vm.Script(webGlue,{filename:'web-glue.js'}),webPolicyScript=new vm.Script(webPolicy,{filename:'web-policy.gs'});
+// State keys for sheet-level optimistic concurrency (see supabase/viral-fast-commit.sql).
+// K = "the whole value at this path"; K+'#rows' = "row-level changes to this sheet".
 export const stateKey=path=>path.map(p=>encodeURIComponent(String(p))).join('/');
 const same=(a,b)=>a===b||JSON.stringify(a)===JSON.stringify(b);
 /**
  * Express a sheet change as row operations: updates of existing rows (matched by the id in column A)
- * and appended rows. Returns null when the change cannot be expressed that way (header edits,
- * deletions, reordering, rows without a unique id), in which case the whole sheet is written.
+ * and appended rows. Returns null when that is not possible (header edits, deletions, reordering,
+ * rows without a unique id); the whole sheet is then written instead.
  */
 export function sheetRowOps(before,after,uniqueNames=[]){
  if(!Array.isArray(before)||!Array.isArray(after)||!before.length||after.length<before.length||!same(before[0],after[0]))return null;
@@ -65,14 +59,13 @@ export function sheetRowOps(before,after,uniqueNames=[]){
  return {update,append,unique};
 }
 /**
- * Compute the minimal patch between the loaded state and the state after a business call.
- * Only sheets the call actually opened are compared, so the cost is proportional to the work done.
- * `rowMerge` ({'books/main/Attendance':['telegram_id','date']}) lets listed sheets be saved as row
- * operations, so e.g. two people checking in at once no longer conflict with each other.
- * Returns {reads, writes, patches, outboxDone, outboxEvents}. Outbox entries move to viral_outbox
- * (events) and are removed from the JSON state instead of growing it forever.
+ * Minimal patch between the loaded state and the state after a business call. Only sheets the call
+ * opened are compared. `rowMerge` ({'books/main/Attendance':['telegram_id','date']}) saves listed sheets
+ * as row operations so two people checking in at once do not conflict.
+ * Returns {reads, writes, patches, outboxDone}; pending outbox entries leave the JSON state once they
+ * are inserted into viral_outbox as events.
  */
-export function diffState(base,next,touched=null,{forceWrites=[],rowMerge={},peek=null}={}){
+export function diffState(base,next,touched=null,{rowMerge={}}={}){
  const reads=new Set(),writes=new Set(),patches=[];
  const put=(path,value)=>{const key=stateKey(path);reads.add(key);writes.add(key);patches.push({path,value:value===undefined?null:value,remove:value===undefined});};
  const baseBooks=base.books||{},nextBooks=next.books||{};
@@ -80,9 +73,8 @@ export function diffState(base,next,touched=null,{forceWrites=[],rowMerge={},pee
   if(!baseBooks[book]||!nextBooks[book]){if(!same(baseBooks[book],nextBooks[book])){put(['books',book],nextBooks[book]);for(const sheet of Object.keys(nextBooks[book]||baseBooks[book]||{})){const k=stateKey(['books',book,sheet]);reads.add(k).add(k+'#rows');writes.add(k);}}continue;}
   const names=touched?[...touched].filter(t=>t.book===book).map(t=>t.name):[...new Set([...Object.keys(baseBooks[book]),...Object.keys(nextBooks[book])])];
   for(const name of new Set([...names,...Object.keys(nextBooks[book]).filter(n=>!Object.hasOwn(baseBooks[book],n))])){
-   // peek() avoids copying sheets that were only read; they are still the input object (=== before).
-   const path=['books',book,name],key=stateKey(path),before=baseBooks[book][name],after=peek?peek(book,name):nextBooks[book][name];
-   const merge=Object.hasOwn(rowMerge,key)&&!forceWrites.includes(key);
+   const path=['books',book,name],key=stateKey(path),before=baseBooks[book][name],after=nextBooks[book][name];
+   const merge=Object.hasOwn(rowMerge,key);
    reads.add(key);if(!merge)reads.add(key+'#rows');
    if(same(before,after))continue;
    const ops=merge?sheetRowOps(before,after,rowMerge[key]):null;
@@ -90,7 +82,6 @@ export function diffState(base,next,touched=null,{forceWrites=[],rowMerge={},pee
    else{reads.add(key+'#rows');put(path,after);}
   }
  }
- for(const key of forceWrites){const path=key.split('/').map(decodeURIComponent);if(!writes.has(key)){let v=next;for(const p of path)v=v?.[p];put(path,v);}}
  const baseFiles=base.files||{},nextFiles=next.files||{};
  for(const id of new Set([...Object.keys(baseFiles),...Object.keys(nextFiles)]))if(!same(baseFiles[id],nextFiles[id]))put(['files',id],nextFiles[id]);
  if(!same(base.properties||{},next.properties||{}))put(['properties'],next.properties||{});
@@ -99,43 +90,20 @@ export function diffState(base,next,touched=null,{forceWrites=[],rowMerge={},pee
   if(!same(base[key],next[key]))put([key],next[key]);
  }
  const pending=(next.outbox||[]).filter(x=>x&&x.status==='pending');
- return {reads:[...reads],writes:[...writes],patches,outboxDone:pending.map(x=>String(x.id)),outboxEvents:pending.map(x=>({id:x.id,chat_id:x.chatId,text:x.text,photo_file_id:null}))};
+ return {reads:[...reads],writes:[...writes],patches,outboxDone:pending.map(x=>String(x.id))};
 }
 const chain=()=>new Proxy({}, {get:(_,key)=>key==='build'?()=>({}):key==='getHandlerFunction'?()=> '':()=>chain()});
 const colNumber=s=>[...s].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
-/**
- * Copy the state lazily: a sheet is deep-copied only when something may modify it (the runtime's write
- * path, or any direct access to data.books[book][sheet]). Read-only access uses peek() and copies
- * nothing; getValues() already returns fresh row arrays. The input is never modified.
- * Sheets are enumerable accessors, so JSON.stringify/structuredClone/Object.keys behave like plain data.
- */
-function lazyStateCopy(input){
- const out={},peekers=new Map();
- for(const [key,value] of Object.entries(input))if(key!=='books')out[key]=structuredClone(value);
- out.books={};
- for(const [bookId,sheets] of Object.entries(input.books||{})){
-  const book={};
-  for(const name of Object.keys(sheets||{})){
-   let value=sheets[name],owned=false;
-   Object.defineProperty(book,name,{enumerable:true,configurable:true,get(){if(!owned){value=structuredClone(value);owned=true;}return value;},set(next){value=next;owned=true;}});
-   peekers.set(bookId+'\u0000'+name,{peek:()=>value,book});
-  }
-  out.books[bookId]=book;
- }
- // Current value without copying. Falls back to a plain property for sheets added during the request
- // (or if the accessor was replaced).
- const peek=(bookId,name)=>{const p=peekers.get(bookId+'\u0000'+name);return p&&out.books[bookId]===p.book&&Object.getOwnPropertyDescriptor(p.book,name)?.get?p.peek():out.books[bookId]?.[name];};
- return {data:out,peek};
-}
 export function createRuntime(input={},user=null,env={}) {
- const {data,peek}=lazyStateCopy(input);data.books??={};data.properties??={};data.files??={};data.outbox??=[];
- const cache=new Map();const uploads=[];const touched=new Map();
+ const data=structuredClone(input);data.books??={};data.properties??={};data.files??={};data.outbox??=[];
+ const cache=new Map();const uploads=[];let readScopeMiss=null;const touched=new Map();
+ const missingScope=name=>{readScopeMiss=new ReadScopeMiss(name);throw readScopeMiss;};
  const props={...data.properties,SHEET_ID:'main',BOT_TOKEN:env.BOT_TOKEN||'',WEB_APP_URL:env.WEB_APP_URL||'',BILL_FOLDER_ID:'bills',GROUP_GREETINGS_ENABLED:env.GROUP_GREETINGS_ENABLED==='true'?'true':'false'};
  const blob=(bytes,type='application/octet-stream',name='file')=>({getBytes:()=>[...Buffer.from(bytes)],getDataAsString:()=>Buffer.from(bytes).toString('utf8'),getContentType:()=>type,getName:()=>name,setName(n){name=n;return this;}});
  class Range {
   constructor(sheet,row,col,nr=1,nc=1){if(!Number.isInteger(row)||!Number.isInteger(col)||row<1||col<1)throw Error('Vùng dữ liệu không hợp lệ');Object.assign(this,{sheet,row,col,nr,nc});}
   // Read the sheet once per call: going through the `cells` getter per cell dominated request time.
-  getValues(){const cells=this.sheet.view,out=new Array(this.nr);for(let r=0;r<this.nr;r++){const src=cells[this.row-1+r],row=new Array(this.nc);for(let c=0;c<this.nc;c++){const v=src?.[this.col-1+c]??'';row[c]=v!==null&&typeof v==='object'?structuredClone(v):v;}out[r]=row;}return out;}
+  getValues(){const cells=this.sheet.cells,out=new Array(this.nr);for(let r=0;r<this.nr;r++){const src=cells[this.row-1+r],row=new Array(this.nc);for(let c=0;c<this.nc;c++)row[c]=src?.[this.col-1+c]??'';out[r]=row;}return out;}
   getValue(){return this.getValues()[0][0];}
   setValues(values){if(values.length!==this.nr||values.some(r=>r.length!==this.nc))throw Error('Kích thước dữ liệu không khớp');const cells=this.sheet.cells;values.forEach((r,i)=>{const row=cells[this.row-1+i]??=[];r.forEach((v,j)=>{row[this.col-1+j]=v instanceof Date?v.toISOString():v;});});return this;}
   setValue(value){return this.setValues(Array.from({length:this.nr},()=>Array(this.nc).fill(value)));}
@@ -148,26 +116,23 @@ export function createRuntime(input={},user=null,env={}) {
  for(const key of ['setDataValidation','clearDataValidations','clearNote','setNote','setNumberFormat','setFontWeight','setBackground'])Range.prototype[key]=function(){return this;};
  class Sheet {
   constructor(name,book){this.name=name;this.book=book;this.key=book+'\u0000'+name;}
-  touch(){if(!touched.has(this.key))touched.set(this.key,{book:this.book,name:this.name});}
-  // All sheet access goes through `view` (read, no copy) or `cells` (write, copies the sheet once);
-  // both record the sheet for diffState.
-  get view(){this.touch();return peek(this.book,this.name);}
-  get cells(){this.touch();return data.books[this.book][this.name];}getName(){return this.name;}getSheetId(){return Object.keys(data.books[this.book]).indexOf(this.name)+1;}getParent(){return new Book(this.book);}
-  getLastRow(){const cells=this.view;let n=cells.length;while(n>0&&!cells[n-1]?.some(v=>v!==''&&v!==null))n--;return n;}
-  getLastColumn(){let max=0;for(const r of this.view){if(!r)continue;let n=r.length;while(n>max&&(r[n-1]===''||r[n-1]==null))n--;if(n>max)max=n;}return max;}
+  // Every read and write of sheet content goes through this getter, which records the sheet for diffState.
+  get cells(){if(!touched.has(this.key))touched.set(this.key,{book:this.book,name:this.name});return data.books[this.book][this.name];}getName(){return this.name;}getSheetId(){return Object.keys(data.books[this.book]).indexOf(this.name)+1;}getParent(){return new Book(this.book);}
+  getLastRow(){const cells=this.cells;let n=cells.length;while(n>0&&!cells[n-1]?.some(v=>v!==''&&v!==null))n--;return n;}
+  getLastColumn(){let max=0;for(const r of this.cells){if(!r)continue;let n=r.length;while(n>max&&(r[n-1]===''||r[n-1]==null))n--;if(n>max)max=n;}return max;}
   getMaxRows(){return Math.max(1000,this.getLastRow());}getMaxColumns(){return Math.max(100,this.getLastColumn());}
   getRange(row,col,nr=1,nc=1){if(typeof row==='string'){const m=/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(row);if(!m)throw Error('Địa chỉ dữ liệu không hợp lệ');return new Range(this,Number(m[2]),colNumber(m[1]),m[4]?Number(m[4])-Number(m[2])+1:1,m[3]?colNumber(m[3])-colNumber(m[1])+1:1);}return new Range(this,row,col,nr,nc);}
   getDataRange(){return this.getRange(1,1,Math.max(1,this.getLastRow()),Math.max(1,this.getLastColumn()));}
   appendRow(row){this.cells.push([...row]);return this;}deleteRow(row){this.cells.splice(row-1,1);return this;}
-  clear(){this.touch();data.books[this.book][this.name]=[];return this;}clearContents(){return this.clear();}getFilter(){return this.filter||null;}
+  clear(){this.cells;data.books[this.book][this.name]=[];return this;}clearContents(){return this.clear();}getFilter(){return this.filter||null;}
   insertRowsAfter(after,count){this.cells.splice(after,0,...Array.from({length:count},()=>[]));return this;}
   insertColumnsAfter(after,count){this.cells.forEach(r=>r.splice(after,0,...Array(count).fill('')));return this;}
  }
  for(const key of ['setFrozenRows','setFrozenColumns','hideColumns','showColumns','setColumnWidth','setColumnWidths'])Sheet.prototype[key]=function(){return this;};
  class Book {
   constructor(id){this.id=id;data.books[id]??={};}getId(){return this.id;}getUrl(){return env.WEB_APP_URL||'';}
-  getSheetByName(name){return Object.hasOwn(data.books[this.id],name)?new Sheet(name,this.id):null;}
-  insertSheet(name){data.books[this.id][name]??=[];return new Sheet(name,this.id);}getSheets(){return Object.keys(data.books[this.id]).map(n=>new Sheet(n,this.id));}
+  getSheetByName(name){if(env.READ_TABLES&&(this.id!=='main'||!env.READ_TABLES.includes(name)))missingScope(name);return Object.hasOwn(data.books[this.id],name)?new Sheet(name,this.id):null;}
+  insertSheet(name){if(env.READ_TABLES)missingScope('write:'+name);data.books[this.id][name]??=[];return new Sheet(name,this.id);}getSheets(){if(env.READ_TABLES)missingScope('all-sheets');return Object.keys(data.books[this.id]).map(n=>new Sheet(n,this.id));}
   getSpreadsheetTimeZone(){return env.GRID_TIMEZONE?.[this.id]||'Asia/Ho_Chi_Minh';}getSpreadsheetLocale(){return 'vi_VN';}toast(){}
  }
  const dateFormat=(value,zone,format)=>{
@@ -200,23 +165,20 @@ export function createRuntime(input={},user=null,env={}) {
   __user:user,__enqueue:(chatId,text)=>{if(!chatId)return false;data.outbox.push({id:crypto.randomUUID(),chatId:String(chatId),text:String(text),status:'pending',createdAt:new Date().toISOString()});return true;}
  });
  context.__storePersonalImage=image=>{const id=context.__storeProjectImage(image);data.files[id].folder='person-avatars';return id;};
- for(const script of scripts)script.runInContext(context,{timeout:10000});
- // Sheets opened while loading the business source are setup lookups, not request reads.
+ businessScript.runInContext(context,{timeout:10000});
+ // Archived rows live in Sheets. Keep compact work totals in Supabase so ordinary
+ // snapshots and mutations remain independent of external history reads.
+ const summary=data.attendanceArchive?.summary,archiveIds=new Set(data.attendanceArchive?.ids||[]),att=data.books?.main?.Attendance||[],idColumn=att[0]?.indexOf('id');
+ const hasArchiveRows=att.slice(1).some(row=>archiveIds.has(String(row[idColumn])));
+ if(summary&&!hasArchiveRows){
+  context.__archivedWorkSummary=summary;
+  vm.runInContext(`const originalArchivedPerformance=performance_;performance_=function(month){return originalArchivedPerformance(month).map(p=>{const a=__archivedWorkSummary[String(month)]?.[String(p.telegram_id)];return a?{...p,work_days:p.work_days+Number(a.days||0),work_minutes:p.work_minutes+Number(a.minutes||0)}:p;});};`,context,{timeout:5000});
+ }
+ webGlueScript.runInContext(context,{timeout:10000});
+ webPolicyScript.runInContext(context,{timeout:10000});
  touched.clear();
- const decorate=result=>result&&typeof result==='object'&&!Array.isArray(result)&&(result.projects||result.user||result.item);
- const run=(name,args=[],internal=false)=>{
-  if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);
-  context.__call=name;context.__args=args;
-  if(READ_ONLY_METHODS.has(name)){
-   context.__decorate=true;context.__result=undefined;const extra=readScopeCallScript.runInContext(context,{timeout:20000}),result=context.__result;context.__result=undefined;
-   if(extra)[result.projectAvatars,result.projectRecords,result.personalAvatars]=extra;
-   return result;
-  }
-  const result=callScript.runInContext(context,{timeout:20000});
-  if(decorate(result))[result.projectAvatars,result.projectRecords,result.personalAvatars]=decorateScript.runInContext(context,{timeout:5000});
-  return result;
- };
- const changes=(base,options)=>diffState(base,data,touched.values(),{...options,peek});
+ const run=(name,args=[],internal=false)=>{if(!internal&&!allowed.has(name))throw Error('Chức năng không được phép');if(typeof context[name]!=='function')throw Error('Không tìm thấy chức năng '+name);context.__call=name;context.__args=args;const result=vm.runInContext('globalThis[__call](...__args)',context,{timeout:20000});if(readScopeMiss)throw readScopeMiss;if(name!=='snapshotAttendance'&&result&&typeof result==='object'&&!Array.isArray(result)&&(result.projects||result.user||result.item)){result.projectAvatars=vm.runInContext('webProjectImages_()',context,{timeout:5000});result.projectRecords=vm.runInContext('webProjectRecords_()',context,{timeout:5000});result.personalAvatars=vm.runInContext('webPersonalAvatars_()',context,{timeout:5000});}return result;};
+ const changes=(base,options)=>diffState(base,data,touched.values(),options);
  return {data,uploads,context,run,changes};
 }
 export function initializeData(){const rt=createRuntime();for(const name of ['setupV20','setupPersonnel','setupV20Features','setupFieldAttendance','setupV2022'])rt.run(name,[],true);return rt.data;}

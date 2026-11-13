@@ -1,95 +1,69 @@
 import 'server-only';
-import {createHash} from 'node:crypto';
 import {createClient as createSupabaseClient} from '@supabase/supabase-js';
 import {createClient} from '@/lib/supabase/server';
+import {bookingReport} from '../../server/viral/booking-report.mjs';
+import {readBookingBook} from '../../server/viral/google-booking.mjs';
 import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
 import {withViralWriteRetry} from '../../server/viral/approval-retry.mjs';
-import {sharedStateRead,stateReadFailure,retryStateRead} from '../../server/viral/state-read.mjs';
+import {versionedStateRead,stateReadFailure,retryStateRead} from '../../server/viral/state-read.mjs';
+import {scopeForMethod,scopeConfig,scopeSelect,scopedState,projectState,ReadScopeMiss} from '../../server/viral/state-scopes.mjs';
 import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
 import {commitWithUploads} from '../../server/viral/commit-uploads.mjs';
-import {stateCache,commitChanges} from '../../server/viral/state-cache.mjs';
+import {commitChanges} from '../../server/viral/patch-commit.mjs';
 import {avatarResolver} from '../../server/viral/avatar-cache.mjs';
+import {loadAttendanceArchive,overlayAttendance} from '../../server/viral/attendance-archive.mjs';
 export function viralService(){
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SERVICE_ROLE_KEY;
  if(!url||!key)throw Error('Chưa cấu hình Supabase cho Viral Network.');
  return createSupabaseClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
 }
-// Verified sign-ins are remembered for 30s per access token (stored as a hash), saving a Supabase Auth
-// round trip and a members query on every request. Business permissions still check the employee's
-// `active` flag in fresh data on every call; a revoked web session stops working within 30s.
-const MEMBER_TTL_MS=30000,memberCache=new Map<string,{at:number,member:{employeeId:string,email:string,authUserId:string}}>();
 export async function webMember(){
- const auth=await createClient();
- const token=(await auth.auth.getSession()).data.session?.access_token,cacheKey=token?createHash('sha256').update(token).digest('hex'):'';
- const hit=cacheKey?memberCache.get(cacheKey):undefined;if(hit&&Date.now()-hit.at<MEMBER_TTL_MS)return hit.member;
- const {data:{user},error}=await auth.auth.getUser();
+ const auth=await createClient();const {data:{user},error}=await auth.auth.getUser();
  if(error||!user)return null;
  const svc=viralService();const {data,error:err}=await svc.from('viral_members').select('employee_id').eq('auth_user_id',user.id).eq('active',true).maybeSingle();
- if(err)throw err;if(!data)return null;
- const member={employeeId:data.employee_id,email:user.email||'',authUserId:user.id};
- if(cacheKey){if(memberCache.size>1000)memberCache.clear();memberCache.set(cacheKey,{at:Date.now(),member});}
- return member;
+ if(err)throw err;if(!data)return null;return {employeeId:data.employee_id,email:user.email||'',authUserId:user.id};
 }
-// Full download only when the version changed since this server instance last read it.
-const viralStateCache=stateCache({
- delta:async(since:number)=>{const svc=viralService(),{data,error}=await svc.rpc('viral_state_delta',{since_version:since}).abortSignal(AbortSignal.timeout(12000));if(error){if(error.code==='PGRST202')return null;throw error;}return data;},
- probe:async()=>{const svc=viralService(),{data,error}=await svc.from('viral_state').select('version').eq('id','main').abortSignal(AbortSignal.timeout(8000)).single();if(error)throw error;return Number(data.version);},
- fetchFull:async()=>{const svc=viralService(),response=await svc.from('viral_state').select('data,version').eq('id','main').abortSignal(AbortSignal.timeout(15000)).single();if(response.error)throw response.error;return {data:response.data.data,version:Number(response.data.version)};}
-});
-async function readRawViralState(retry=false){
+async function readFreshViralState(retry=false,syncNotifications=true){
+ const svc=viralService();let result;
  const started=Date.now();
- try{return await retryStateRead(()=>viralStateCache.read(),{retry});}catch(error){const failure=stateReadFailure(error);console.error('viral_state_read',{code:failure.code,stage:'main',elapsed_ms:Date.now()-started,retry_enabled:retry});throw failure;}
-}
-// Mark notifications already delivered by the outbox worker. Copy-on-write: the sheet is replaced,
-// never edited in place, so a shared cached snapshot is never modified.
-async function reconcileNotifications(svc:any,data:any){
- const rows=data.books.main.Notifications||[],h=rows[0]||[],status=h.indexOf('status'),key=h.indexOf('id');
+ try{result=await retryStateRead(async()=>{const response=await svc.from('viral_state').select('data,version').eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();if(response.error)throw stateReadFailure(response.error,'main',response.status);return response;},{retry});}catch(error){const failure=stateReadFailure(error,'main');console.error('viral_state_read',{code:failure.code,stage:'main',elapsed_ms:Date.now()-started,retry_enabled:retry});throw failure;}
+ const {data}=result;
+ // Attendance uses the latest COMPLETE state but does not wait for notification delivery reconciliation.
+ // Existing notification events keep their durable IDs; viral_commit inserts them ON CONFLICT DO NOTHING.
+ if(!syncNotifications)return {data:data.data,version:data.version};
+ const rows=data.data.books.main.Notifications||[],h=rows[0]||[],status=h.indexOf('status'),key=h.indexOf('id');
  const ids=rows.slice(1).filter((r:any)=>['pending','failed'].includes(r[status])).map((r:any)=>'notification:'+r[key]);
- const done=new Set<string>();
- for(let i=0;i<ids.length;i+=100){const {data:sent,error:e}=await svc.from('viral_outbox').select('id').in('id',ids.slice(i,i+100)).eq('status','sent').abortSignal(AbortSignal.timeout(8000));if(e)throw stateReadFailure(e);for(const m of sent||[])done.add(m.id);}
- if(!done.size)return false;
- const at=new Date().toISOString(),sentAt=h.indexOf('sent_at');
- data.books.main.Notifications=rows.map((r:any,i:number)=>{if(!i||!done.has('notification:'+r[key]))return r;const copy=r.slice();copy[status]='sent';copy[sentAt]=at;return copy;});
- return true;
+ for(let i=0;i<ids.length;i+=100){const {data:sent,error:e}=await svc.from('viral_outbox').select('id').in('id',ids.slice(i,i+100)).eq('status','sent').abortSignal(AbortSignal.timeout(8000));if(e)throw stateReadFailure(e,'notifications');const done=new Set((sent||[]).map((m:any)=>m.id));for(const r of rows.slice(1))if(done.has('notification:'+r[key])){r[status]='sent';r[h.indexOf('sent_at')]=new Date().toISOString();}}
+ return {data:data.data,version:data.version};
 }
-// In-flight sharing for read-only methods; the cached snapshot itself is immutable so no clone is needed.
-let inflightRead:Promise<any>|null=null;
-function sharedRawRead(){if(!inflightRead){const p=readRawViralState(true);inflightRead=p;p.finally(()=>{if(inflightRead===p)inflightRead=null;}).catch(()=>{});}return inflightRead;}
-const readSharedViralState=sharedStateRead(()=>readRawViralState(true));
-/**
- * light: return a private shallow view of the cached snapshot instead of a deep copy. Only for callers
- * that hand the data to createRuntime (which copies sheets lazily) and do not edit nested values.
- */
-export async function loadViral(options:{share?:boolean,light?:boolean}={}){
- const svc=viralService();let raw:{data:any,version:number};
- if(options.light){
-  const snap=await (options.share?sharedRawRead():readRawViralState());
-  raw={version:snap.version,data:{...snap.data,books:{...snap.data.books,main:{...snap.data.books.main}},files:structuredClone(snap.data.files||{})}};
- }
- // sharedStateRead already returns a private clone; the direct path clones the cached snapshot here.
- else raw=options.share?await readSharedViralState():await readRawViralState().then(r=>({data:structuredClone(r.data),version:r.version}));
- const reconciled=await reconcileNotifications(svc,raw.data);
- return {svc,data:raw.data,version:raw.version,reconciled};
+async function stateQuery(columns:string,retry=true,retryCancelled=true){
+ const stage=columns==='version'?'version':'profile',started=Date.now();
+ try{return await retryStateRead(async()=>{
+  const response=await viralService().from('viral_state').select(columns).eq('id','main').abortSignal(AbortSignal.timeout(12000)).single();
+  if(response.error)throw stateReadFailure(response.error,stage,response.status);return response.data;
+ },{retry,retryCancelled});}catch(error){const failure=stateReadFailure(error,stage);console.error('viral_state_read',{code:failure.code,stage:failure.stage,http_status:failure.httpStatus,elapsed_ms:Date.now()-started,retry_enabled:retry});throw failure;}
 }
-/**
- * Save the difference between `base` and the runtime's state. Only changed sheets are sent and
- * only concurrent writes to sheets this request read or wrote cause a version conflict.
- * Returns {changed,committed,version}.
- */
-export async function commitViral(svc:any,base:any,version:number,rt:any,options:{forceWrites?:string[],rowMerge?:Record<string,string[]>}={}){
- const changes=rt.changes(base,{forceWrites:options.forceWrites||[],rowMerge:options.rowMerge||{}});
- if(!changes.patches.length&&!changes.outboxDone.length)return {changed:false,committed:true,version};
- let saved:any;
- await commitWithUploads({uploads:rt.uploads||[],
-  upload:(file:any)=>svc.storage.from('viral-files').upload(file.id,file.bytes,{contentType:file.type,upsert:false}),
-  remove:async(ids:string[])=>{const {error}=await svc.storage.from('viral-files').remove(ids);if(error)throw error;},
-  commit:async()=>{saved=await commitChanges({rpc:(name:string,params:any)=>svc.rpc(name,params).abortSignal(AbortSignal.timeout(20000)),version,changes,events:makeEvents(rt.data),fullData:()=>rt.data,onFallback:()=>console.warn('viral_commit_patch missing: run supabase/viral-fast-commit.sql')});return saved;}
- });
- if(saved?.legacy)viralStateCache.invalidate();else viralStateCache.committed(version,saved.version,changes.patches,changes.outboxDone);
- readSharedViralState.invalidate();
- return {changed:true,committed:true,version:saved.version};
+const readSharedViralState=versionedStateRead({
+ readVersion:async()=>{const row:any=await stateQuery('version');return row.version;},
+ readSnapshot:async(scope:string)=>{
+  if(scope==='full')return readFreshViralState(true);
+  try{return scopedState(await stateQuery(scopeSelect(scope),true,false),scope);}
+  catch(error){
+   // JSON-path projection can time out on a large compressed state document.
+   // Fall back only on database cancellation, never on permissions or missing rows.
+   if((error as any)?.code!=='57014')throw error;
+   console.warn('viral_scoped_read_timeout',{scope});
+   const fresh=await readFreshViralState(true,scope!=='attendance');
+   return {data:projectState(fresh.data,scope),version:fresh.version};
+  }
+ },
+});
+export function invalidateViralState(){readSharedViralState.invalidate();}
+export async function loadViral(options:{share?:boolean;scope?:string;skipNotificationSync?:boolean}={}){
+ if(options.scope&&!options.share)throw Error('Read scopes cannot be used for writes.');
+ return {svc:viralService(),...await (options.share?readSharedViralState(options.scope||'full'):readFreshViralState(true,!options.skipNotificationSync))};
 }
 export function sameOrigin(req:Request){const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)throw Error('Nguồn yêu cầu không hợp lệ.');}
 export const makeEvents=(data:any)=>{
@@ -99,25 +73,47 @@ export const makeEvents=(data:any)=>{
  return events;
 };
 const queuedAttendance=attendanceQueue();
-// Sheets these methods may save row-by-row. They only read/modify the caller's own row (found by
-// telegram_id + date), so concurrent check-ins by different people merge instead of conflicting;
-// the unique columns stop the same person getting two rows for one day.
+// Sheets these methods may save row-by-row. They read/modify only the caller's own row (found by
+// telegram_id + date), so concurrent check-ins by different people merge instead of conflicting.
+// The unique columns stop the same person getting two rows for one day (e.g. two devices at once).
 const attendanceRows={'books/main/Attendance':['telegram_id','date'],'books/main/Notifications':['event_key']};
 const ROW_MERGE:Record<string,Record<string,string[]>>={attendance:attendanceRows,fieldAttendance:attendanceRows,overtime:{'books/main/Overtime':['telegram_id','date']}};
 export async function invokeViral(method:string,args:any[],initData:string,user:any){
  return queuedAttendance(method,()=>withViralWriteRetry(method,()=>invokeViralAttempt(method,args,initData,user)));
 }
 async function invokeViralAttempt(method:string,args:any[],initData:string,user:any){
+ const scope=scopeForMethod(method);
+ try{return await invokeViralOnce(method,args,initData,user,scope);}
+ catch(error){
+  if(scope&&error instanceof ReadScopeMiss){
+   console.warn('viral_read_profile_fallback',{method,table:error.table});
+   // Future business changes may add a dependency or initialization side effect.
+   // Retry from a fresh COMPLETE snapshot; never commit a partial projection.
+   return invokeViralOnce(method,args,initData,user,null);
+  }
+  throw error;
+ }
+}
+async function invokeViralOnce(method:string,args:any[],initData:string,user:any,scope:string|null){
  if(process.env.VIRAL_MAINTENANCE==='true')throw Error('Web đang tạm dừng để chuyển dữ liệu. Mini App cũ vẫn dùng bình thường.');
- const share=['snapshotHome','snapshotCore','snapshotManager','avatarBatch','accountingExpenses','productionPage','productionScreen','attendanceStatus','reviewQueue','staffProductionWorkload'].includes(method);
- const {svc,data,version}=await loadViral({share,light:true});
- let rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
+ const {svc,data,version}=await loadViral(scope?{share:true,scope}:{skipNotificationSync:['attendance','fieldAttendance'].includes(method)});
+ // Daily attendance and production do not depend on Google Sheets availability.
+ // Compact archived totals serve monthly summaries; only historical row reports fetch Sheets.
+ const needsArchivedRows=['fieldAttendanceReport','managerAttendanceDay'].includes(method);
+ const archiveView=overlayAttendance(data,needsArchivedRows?await loadAttendanceArchive(data):null);
+ const runtimeEnv={BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL,...(scope?{READ_TABLES:scopeConfig(scope).tables}:{})};
+ let rt=createRuntime(archiveView.input,user,runtimeEnv);
  rt.context.__authInput=initData;
  const vm=await import('node:vm');
  if(['personnelDirectory','personnelDetail','savePersonnel','personnelHistory','restorePersonnel'].includes(method)){
   vm.runInContext(`const previousHRPermission=hrRequireManager_;hrRequireManager_=function(u){if(String(u.id)===String(setting_('hr_telegram_id')||''))return;return previousHRPermission(u);};const previousHRValidation=hrValidation_;hrValidation_=function(data,before,all,u){if(!isDirector_(u)&&String(u.id)===String(setting_('hr_telegram_id')||'')&&before&&role_(before.role)!=='employee')throw Error('HR chỉ sửa hồ sơ nhân viên; hồ sơ quản lý cần Ban giám đốc.');return previousHRValidation(data,before,all,u);};`,rt.context,{timeout:5000});
  }
  const actor=vm.runInContext('auth_(__authInput)',rt.context,{timeout:5000});
+ if(method==='bookingReport'){
+  if(actor.role!=='director')throw Error('Chỉ Ban giám đốc được xem đơn hàng booking.');
+  const filters=args[0]||{};
+  return bookingReport(await readBookingBook({refresh:filters.refresh===true}),filters);
+ }
  if(method==='financeReport'){
   if(actor.role!=='director')throw Error('Chỉ Ban giám đốc được xem Thu chi');
   const {config,book,detailBook,format}=await readFinanceBook(data);
@@ -142,13 +138,30 @@ async function invokeViralAttempt(method:string,args:any[],initData:string,user:
   fileIds=[String(expense.payment_file_id)];
  }
  for(const id of fileIds){const f=data.files[id];if(!f||f.deleted)throw Error('Không thấy tệp đính kèm');const {data:blob,error}=await svc.storage.from('viral-files').download(f.path);if(error||!blob)throw Error('Không đọc được tệp đính kèm');f.bytes=Buffer.from(await blob.arrayBuffer()).toString('base64');}
- if(fileIds.length)rt=createRuntime(data,user,{BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,WEB_APP_URL:process.env.VIRAL_WEB_URL});
+ if(fileIds.length){archiveView.input.files=data.files;rt=createRuntime(archiveView.input,user,runtimeEnv);}
  let result;
  if(method==='avatarBatch')result=await avatars(rt,args[0]);
  else result=rt.run(method,[initData,...args]);
+ archiveView.strip(rt.data);
  for(const file of Object.values(rt.data.files||{}) as any[])delete file.bytes;
  for(const file of Object.values(data.files||{}) as any[])delete file.bytes;
- await commitViral(svc,data,version,rt,{rowMerge:ROW_MERGE[method]});
+ if(scope){
+  if(rt.uploads.length||JSON.stringify(rt.data)!==JSON.stringify(data))throw new ReadScopeMiss('side-effect');
+  return result;
+ }
+ // Save only what changed: whole sheets for most methods, single rows for check-in/out.
+ const changes=rt.changes(data,{rowMerge:ROW_MERGE[method]||{}});
+ const knownOutbox=new Set((data.outbox||[]).map((x:any)=>String(x?.id)));
+ const queued=(rt.data.outbox||[]).some((x:any)=>!knownOutbox.has(String(x?.id)));
+ if(changes.patches.length||queued||rt.uploads.length){
+  await commitWithUploads({uploads:rt.uploads,
+   upload:(file:any)=>svc.storage.from('viral-files').upload(file.id,file.bytes,{contentType:file.type,upsert:false}),
+   remove:async(ids:string[])=>{const {error}=await svc.storage.from('viral-files').remove(ids);if(error)throw error;},
+   commit:()=>commitChanges({rpc:(name:string,params:any)=>svc.rpc(name,params),version,changes,events:makeEvents(rt.data),fullData:()=>rt.data,
+    onFallback:()=>console.warn('viral_commit_patch missing: run supabase/viral-fast-commit.sql')})
+  });
+  readSharedViralState.invalidate();
+ }
  return result;
 }
 const resolveAvatarPhotos=avatarResolver();

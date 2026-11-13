@@ -1,5 +1,5 @@
 import {NextResponse} from 'next/server';
-import {webMember,loadViral,sameOrigin,makeEvents} from '@/lib/viral';
+import {webMember,loadViral,sameOrigin,makeEvents,invalidateViralState} from '@/lib/viral';
 import {adminActor,adminSnapshot,adminChange,adminBackup} from '../../../../../server/viral/admin.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 const emails=()=>process.env.VIRAL_ADMIN_EMAILS||'';
@@ -22,4 +22,5 @@ export async function POST(req:Request){
  if(error)throw Error('Không lưu được thay đổi quản trị.');if(!saved)return response({error:'Dữ liệu vừa được cập nhật. Làm mới bảng trước khi lưu.'},409);
  return response({ok:true,result:changed.result});
  }catch(e){return response({error:e instanceof Error?e.message:'Không lưu được dữ liệu.'},400);}
+ finally{invalidateViralState();}
 }

@@ -30,3 +30,18 @@ test('directory sync creates ten project groups, excludes general group, preserv
 test('a later legacy import retains the synced web directory and project group IDs',async()=>{
  const {retainProjectDirectory}=await import('../project-images.mjs');const rt=createRuntime(fixture(),{employeeId:'1'});api(rt,'syncWebProjectDirectory',true);const candidate=fixture();row(candidate,'Projects',{code:'DA007',name:'MC Minh Hải',telegram_group_chat_id:'-1234567'});row(candidate,'ProductionItems',{id:'old1',project:'DA007 - MC Minh Hải',title:'Dữ liệu cũ',stage:'brief'});retainProjectDirectory(candidate,rt.data);const h=candidate.books.main.Projects[0],rows=candidate.books.main.Projects.slice(1);assert.equal(rows.length,10);assert.equal(rows.find(r=>r[h.indexOf('code')]==='DA007')[h.indexOf('telegram_group_chat_id')],'-1004453115560');assert.equal(candidate.books.main.ProductionItems[1][candidate.books.main.ProductionItems[0].indexOf('project')],'DA007 - Đà Nẵng Local');assert.equal(candidate.books.main.Settings.find(r=>r[0]==='group_chat_id')[1],'-1003982647263');
 });
+
+test('archived projects are absent from production pages and every metric while history and management record remain',()=>{
+ const rt=createRuntime(fixture(),{employeeId:'1'});
+ api(rt,'createV20Project','LIVE','Đang chạy');api(rt,'createV20Project','OLD','Đã ngưng');
+ for(const project of ['LIVE - Đang chạy','OLD - Đã ngưng'])for(const stage of ['brief','script','edit','ready','published'])row(rt.data,'ProductionItems',{id:project+stage,project,title:stage,stage,department:'Content',created_by:'1',idea_approval:stage==='brief'?'':'Duyệt',final_url:['ready','published'].includes(stage)?'https://example.com/final':'',final_delivery_status:['ready','published'].includes(stage)?'complete':''});
+ const before=structuredClone(rt.data.books.main.ProductionItems);
+ api(rt,'updateWebProject','OLD',{action:'archive',revision:rec(rt,'OLD').revision});
+ for(const metric of ['all','shooting','waiting','edited','published']){
+  const page=api(rt,'productionPage',{metric});assert.equal(page.stats['OLD - Đã ngưng'],undefined);assert.ok(page.items.every(x=>x.project==='LIVE - Đang chạy'));
+  const archived=api(rt,'productionPage',{project:'OLD - Đã ngưng',metric});assert.equal(archived.total,0);
+ }
+ const screen=api(rt,'productionScreen',{});assert.deepEqual(Array.from(screen.projects),['LIVE - Đang chạy']);assert.ok(screen.projectRecords.some(p=>p.code==='OLD'&&p.archived));
+ assert.equal(api(rt,'productionPage',{}).stats['LIVE - Đang chạy'].total,5);
+ assert.deepEqual(rt.data.books.main.ProductionItems,before);
+});

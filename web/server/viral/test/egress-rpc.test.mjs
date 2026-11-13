@@ -7,6 +7,7 @@ import ts from 'typescript';
 import {initializeData,createRuntime} from '../runtime.mjs';
 import {scopeConfig,ReadScopeMiss} from '../state-scopes.mjs';
 import {ViralVersionConflict} from '../approval-retry.mjs';
+import {applyCommitPatch} from '../patch-commit.mjs';
 const sourceURL=new URL('../../../src/lib/viral.ts',import.meta.url);
 const compiled=ts.transpileModule(fs.readFileSync(sourceURL,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
 const actualRequire=createRequire(sourceURL);
@@ -17,7 +18,8 @@ function fixture(){
  return data;
 }
 function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null,outboxFault=null,uncertainCommit=false}={}){
- let state=fixture(),version=1,interfere=null;const queries=[],commits=[],bookingReads=[],outboxReads=[];
+ // log mirrors viral_state_log: writes made outside the commit functions are unknown ('*').
+ let state=fixture(),version=1,interfere=null,log=[];const queries=[],commits=[],bookingReads=[],outboxReads=[];
  class Query{
   constructor(table){this.table=table;this.columns='';}
   select(columns){this.columns=columns;return this;}eq(){return this;}in(){return this;}abortSignal(){return this;}
@@ -36,10 +38,16 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
   then(resolve,reject){if(this.table==='viral_outbox')outboxReads.push(this.columns);return Promise.resolve({data:[],error:this.table==='viral_outbox'?outboxFault:null}).then(resolve,reject);}
  }
  const svc={from:table=>new Query(table),rpc:async(name,args)=>{
-  assert.equal(name,'viral_commit');commits.push(args);
-  if(interfere){const operation=interfere;interfere=null;state=operation(state);version++;}
-  if(args.expected_version!==version)return {data:false,error:null};
-  state=structuredClone(args.new_data);version++;return uncertainCommit?{data:null,error:{message:'response lost'}}:{data:true,error:null};
+  assert.ok(['viral_commit','viral_commit_patch'].includes(name));commits.push({...args,rpc:name});
+  if(interfere){const operation=interfere;interfere=null;state=operation(state);version++;log.push({version,keys:['*']});}
+  if(name==='viral_commit'){
+   if(args.expected_version!==version)return {data:false,error:null};
+   state=structuredClone(args.new_data);version++;log.push({version,keys:['*']});return uncertainCommit?{data:null,error:{message:'response lost'}}:{data:true,error:null};
+  }
+  const saved=applyCommitPatch({state,version,log},structuredClone(args));
+  if(!saved)return {data:0,error:null};
+  state=saved.state;version=saved.version;log.push({version,keys:saved.keys});
+  return uncertainCommit?{data:null,error:{message:'response lost'}}:{data:version,error:null};
  }};
  const exports={},sandbox={exports,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://test.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'test'}},Buffer,AbortSignal,setTimeout,console:{warn(){},error(){}},require:id=>{
   if(id==='server-only')return {};
@@ -58,7 +66,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
   return actualRequire(id);
  }};
  vm.runInNewContext(compiled,sandbox,{filename:sourceURL.pathname,timeout:10000});
- return {api:exports,queries,commits,bookingReads,outboxReads,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;},duringCommit:operation=>interfere=operation};
+ return {api:exports,queries,commits,bookingReads,outboxReads,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;log.push({version,keys:['*']});},duringCommit:operation=>interfere=operation};
 }
 test('actual RPC reuses unchanged scoped data, reauthenticates each user and sees remote writes',async()=>{
  const h=harness(),run=id=>h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:id});

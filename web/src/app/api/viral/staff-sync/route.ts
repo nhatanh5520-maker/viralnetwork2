@@ -1,4 +1,4 @@
-import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {loadViral,webMember,sameOrigin} from '@/lib/viral';import {hrAccountActor} from '../../../../../server/viral/hr-accounts.mjs';import {readStaffRoster,previewStaffProfiles,applyStaffProfiles} from '../../../../../server/viral/staff-roster.mjs';
+import {NextResponse} from 'next/server';import crypto from 'node:crypto';import {loadViral,webMember,sameOrigin,invalidateViralState} from '@/lib/viral';import {hrAccountActor} from '../../../../../server/viral/hr-accounts.mjs';import {readStaffRoster,previewStaffProfiles,applyStaffProfiles} from '../../../../../server/viral/staff-roster.mjs';
 import {createClient} from '@/lib/supabase/server';
 import {refreshStaffOperatorSession} from '../../../../../server/viral/staff-session.mjs';
 import {applyStaffRoster} from '../../../../../server/viral/staff-apply.mjs';
@@ -46,4 +46,4 @@ export async function POST(req:Request){try{
   }});return reply({ok:true,backupId});
  }
  throw Error('Thao tác không hợp lệ.');
- }catch(e){return reply({error:e instanceof Error?e.message:'Chưa đồng bộ được nhân sự.'},400);}}
+ }catch(e){return reply({error:e instanceof Error?e.message:'Chưa đồng bộ được nhân sự.'},400);}finally{invalidateViralState();}}
