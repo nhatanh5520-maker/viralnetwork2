@@ -10,7 +10,8 @@
   box.textContent=failed?'Chưa tải được dữ liệu mới. Hệ thống đang tự thử lại.':formDirty?'Dữ liệu sẽ tự cập nhật sau khi bạn lưu hoặc hủy phần đang nhập.':'Dữ liệu sẽ tự cập nhật khi bạn hoàn tất thao tác.';
  }
  function invalidate(scopes){if(!scopes.length)return;if(scopes.some(x=>['projects','people','settings'].includes(x)))needsProductionCore=true;pendingReadCalls.clear();corePromise=null;coreReady=false;managerPromise=null;lastManagerRefresh=0;if(scopes.some(x=>['production','projects','people','settings'].includes(x)))productionPageCache.clear();if(scopes.some(x=>['expenses','people','settings'].includes(x))&&typeof paymentWorkspace!=='undefined'){paymentWorkspace.loaded=false;expenseContentCache.clear();}}
- function ingest(signal){const changed=tracker.accept(signal);invalidate(changed);if(changed.length){banner();queue();}}
+ // Random spread so devices that receive the same signal do not all reload at the same instant.
+ function ingest(signal){const changed=tracker.accept(signal);invalidate(changed);if(changed.length){banner();queue(800+Math.floor(Math.random()*1700));}}
  function queue(delay=800){if(flushTimer)return;const epoch=generation;flushTimer=setTimeout(()=>{if(epoch!==generation)return;flushTimer=null;flush();},delay);}
  async function refreshPage(batch,manual){
   if(tab==='production'){
