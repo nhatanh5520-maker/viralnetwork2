@@ -72,6 +72,11 @@ test('realtime resumes after a 401 and a new login, ignoring old session callbac
 });
 test('a signal being refreshed on one tab is not acknowledged for a different tab',async()=>{
  const x=setup(),{w}=x;try{await x.tick();w.eval("tab='home';var finishRead;refreshSnapshot=()=>new Promise(resolve=>{finishRead=resolve;});");
- x.listeners.signal({new:{versions:{production:1}}});const timer=x.timers.find(t=>t.ms===800);assert.ok(timer);const running=timer.fn();await x.tick();w.eval("tab='production';finishRead(true);");await running;await x.tick();await x.flush();assert.equal(w.eval('refreshCount'),1);
+ x.listeners.signal({new:{versions:{production:1}}});const timer=x.timers.find(t=>t.ms>=800&&t.ms<2500);assert.ok(timer);const running=timer.fn();await x.tick();w.eval("tab='production';finishRead(true);");await running;await x.tick();await x.flush();assert.equal(w.eval('refreshCount'),1);
  }finally{x.dom.window.close();}
+});
+test('other people checking in does not reload Home or Attendance, but does reload attendance review',()=>{
+ const t=new ChangeTracker();t.accept({versions:{attendance:5}});
+ assert.equal(t.relevant('home').size,0);assert.equal(t.relevant('attendance').size,0);assert.equal(t.relevant('fieldReview').size,1);assert.equal(t.relevant('performance').size,1);
+ t.accept({versions:{schedule:6}});assert.equal(t.relevant('attendance').size,1);
 });

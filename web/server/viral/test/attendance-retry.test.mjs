@@ -8,7 +8,7 @@ test('check-ins from two staff preserve both records after an explicit version c
  const repeated=createRuntime(current,{employeeId:'1002'});assert.equal(repeated.run('attendance',args).already,true);assert.equal(repeated.data.books.main.Attendance.length,3);
 });
 test('attendance never retries uncertain network failure and stops after bounded version rejections',async()=>{
- for(const method of ['attendance','fieldAttendance']){let calls=0;await assert.rejects(withViralWriteRetry(method,async()=>{calls++;throw Error('network timeout');}),/network timeout/);assert.equal(calls,1);calls=0;await assert.rejects(withViralWriteRetry(method,async()=>{calls++;throw new ViralVersionConflict();}),ViralVersionConflict);assert.equal(calls,3);}
+ for(const method of ['attendance','fieldAttendance']){let calls=0;await assert.rejects(withViralWriteRetry(method,async()=>{calls++;throw Error('network timeout');}),/network timeout/);assert.equal(calls,1);calls=0;let pauses=0;await assert.rejects(withViralWriteRetry(method,async()=>{calls++;throw new ViralVersionConflict();},{pause:async()=>{pauses++;}}),ViralVersionConflict);assert.equal(calls,6);assert.equal(pauses,5);}
 });
 
 test('a burst of twenty check-ins is serialized in one process without blocking reads',async()=>{

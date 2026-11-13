@@ -1,11 +1,10 @@
 import {NextResponse} from 'next/server';
 import crypto from 'node:crypto';
-import {viralService,loadViral} from '@/lib/viral';
+import {viralService,loadViral,commitViral} from '@/lib/viral';
+import {ViralVersionConflict} from '../../../../../server/viral/approval-retry.mjs';
 import {createRuntime} from '../../../../../server/viral/runtime.mjs';
 import {telegramFailure} from '../../../../../server/viral/telegram-errors.mjs';
 import {drainNotifications} from '../../../../../server/viral/notification-worker.mjs';
-import {commitSchedulerState} from '../../../../../server/viral/scheduler-commit.mjs';
-import {commitState,drainOutbox} from '../../../../../server/viral/state-commit.mjs';
 export const runtime='nodejs';export const maxDuration=60;
 export async function GET(req:Request){
  if(process.env.VIRAL_MAINTENANCE==='true')return NextResponse.json({error:'Tạm dừng để chuyển dữ liệu.'},{status:503});
@@ -17,10 +16,10 @@ export async function GET(req:Request){
   // Group shift/lunch greetings are disabled by default; work reminders remain.
   const state=await loadViral(),rt=createRuntime(state.data,null,{BOT_TOKEN:token,WEB_APP_URL:process.env.VIRAL_WEB_URL,GROUP_GREETINGS_ENABLED:process.env.VIRAL_GROUP_GREETINGS_ENABLED});
   phase='scheduler';rt.run('v16Scheduler',[],true);
-  const h=rt.data.books.main.Notifications[0],events=rt.data.books.main.Notifications.slice(1).map((r:any)=>Object.fromEntries(h.map((k:string,i:number)=>[k,r[i]]))).filter((r:any)=>['pending','failed'].includes(r.status)).map((r:any)=>({id:'notification:'+r.id,chat_id:String(r.telegram_id),text:String(r.message),photo_file_id:r.photo_file_id||null}));
-  events.push(...drainOutbox(rt.data));
-  // Send only changed tabs; outbox entries move to viral_outbox in the same transaction.
-  phase='commit_scheduler';const {committed}=await commitSchedulerState(state.data,rt.data,()=>commitState({rpc:(name:string,params:any)=>state.svc.rpc(name,params).abortSignal(AbortSignal.timeout(10000)),base:state.base,next:rt.data,version:state.version,events}));
+  // Save only the sheets the scheduler changed; also persist notifications the outbox already sent.
+  phase='commit_scheduler';let committed=true;
+  try{await commitViral(state.svc,state.data,state.version,rt,{forceWrites:state.reconciled?['books/main/Notifications']:[]});}
+  catch(e){if(e instanceof ViralVersionConflict)committed=false;else throw e;}
   // A scheduler CAS conflict must not block delivery of already committed events.
   const svc=viralService(),errors=new Set<string>();
   const counts=await drainNotifications({deadline:workerDeadline,
