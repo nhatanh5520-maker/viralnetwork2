@@ -70,10 +70,10 @@ test('visibility and money: participants see their bookings; amount only for Acc
  assert.ok(b.id);
 });
 
-test('validation: only Accounts create; dates in order; repeated request does not duplicate',()=>{
+test('validation: only Accounts and Directors create; dates in order; repeated request does not duplicate',()=>{
  const a=app();
  assert.throws(()=>a.as(VJ)('createBooking',input()),/Chỉ Account/);
- assert.throws(()=>a.as(DIR)('createBooking',input()),/Chỉ Account|Ban giám đốc/);
+ assert.equal(a.as(DIR)('bookingScreen').canCreate,true,'Directors can create bookings');
  assert.throws(()=>a.as(ACC)('createBooking',input({deliver_at:'2026-11-19T00:00:00Z'})),/sau ngày quay/);
  assert.throws(()=>a.as(ACC)('createBooking',input({amount_vnd:'0'})),/Số tiền/);
  assert.throws(()=>a.as(ACC)('createBooking',input({talent_id:''})),/Talent/);

@@ -19,7 +19,7 @@ function fixture(){
 }
 function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null,outboxFault=null,uncertainCommit=false}={}){
  // log mirrors viral_state_log: writes made outside the commit functions are unknown ('*').
- let state=fixture(),version=1,interfere=null,log=[];const queries=[],commits=[],bookingReads=[],outboxReads=[];
+ let state=fixture(),version=1,interfere=null,log=[];const queries=[],commits=[],bookingReads=[],outboxReads=[],sheetSyncs=[];
  class Query{
   constructor(table){this.table=table;this.columns='';}
   select(columns){this.columns=columns;return this;}eq(){return this;}in(){return this;}abortSignal(){return this;}
@@ -51,6 +51,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
  }};
  const exports={},sandbox={exports,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://test.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'test'}},Buffer,AbortSignal,setTimeout,console:{warn(){},error(){}},require:id=>{
   if(id==='server-only')return {};
+  if(id.endsWith('/booking-sheet.mjs'))return {syncBookingSheet:async rows=>{sheetSyncs.push(structuredClone(rows));return {written:1};}};
   if(id.endsWith('/google-booking.mjs'))return {readBookingBook:async options=>{bookingReads.push(options);if(!bookingBook)throw Error('Unexpected Google read');return structuredClone(bookingBook);}};
   if(id==='@supabase/supabase-js')return {createClient:()=>svc};
   if(id==='@/lib/supabase/server')return {createClient:async()=>({auth:{getUser:async()=>({data:{user:null}})}})};
@@ -66,7 +67,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
   return actualRequire(id);
  }};
  vm.runInNewContext(compiled,sandbox,{filename:sourceURL.pathname,timeout:10000});
- return {api:exports,queries,commits,bookingReads,outboxReads,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;log.push({version,keys:['*']});},duringCommit:operation=>interfere=operation};
+ return {api:exports,queries,commits,bookingReads,outboxReads,sheetSyncs,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;log.push({version,keys:['*']});},duringCommit:operation=>interfere=operation};
 }
 test('actual RPC reuses unchanged scoped data, reauthenticates each user and sees remote writes',async()=>{
  const h=harness(),run=id=>h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:id});
@@ -178,4 +179,16 @@ test('attendance status retries a scoped network read and its cancellation fallb
  await h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});assert.equal(h.queries.filter(x=>x.includes('s0:')).length,2);assert.ok(!h.queries.includes('data,version'));
  const fallback=harness({readFault:columns=>columns.includes('s0:')?'57014':null,outboxFault:{code:'42501'}});fallback.externalWrite(pendingNotification);
  const result=await fallback.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});assert.equal(result.attendance,null);assert.equal(fallback.outboxReads.length,0);assert.equal(fallback.commits.length,0);
+});
+
+test('saving a booking copies it to the CRM Sheet after the response, once per change',async()=>{
+ const h=harness(),tick=()=>new Promise(r=>setTimeout(r,20));
+ const day=new Date(Date.now()+86400000).toISOString();
+ await h.api.invokeViral('createV20Project',['VN','Viral'],'supabase',{employeeId:'1001'});await tick();
+ assert.equal(h.sheetSyncs.length,0,'no bookings yet: the Sheet is not touched');
+ const created=await h.api.invokeViral('createBooking',[{project:'VN - Viral',brand:'Cafe Phố',brief:'Brief',amount_vnd:25000000,shoot_at:day,deliver_at:day,acceptance_at:day,cc_id:'1004',vj_id:'1004',talent_id:'1002',request_id:'egress-booking-0000001'}],'supabase',{employeeId:'1003'});
+ await tick();assert.equal(h.sheetSyncs.length,1);
+ const row=h.sheetSyncs[0][0];assert.equal(row.code,created.bookings[0].order_code);assert.equal(row.amount,25000000);assert.equal(row.brand,'Cafe Phố');
+ await h.api.invokeViral('createTask',['1002','Việc khác','Edit',1,1,day],'supabase',{employeeId:'1001'}).catch(()=>{});await tick();
+ assert.equal(h.sheetSyncs.length,1,'an unrelated save with unchanged bookings does not rewrite the Sheet');
 });

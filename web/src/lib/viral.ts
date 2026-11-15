@@ -1,6 +1,8 @@
 import 'server-only';
 import {createClient as createSupabaseClient} from '@supabase/supabase-js';
 import {createClient} from '@/lib/supabase/server';
+import {after} from 'next/server';
+import {syncBookingSheet} from '../../server/viral/booking-sheet.mjs';
 import {bookingReport} from '../../server/viral/booking-report.mjs';
 import {readBookingBook} from '../../server/viral/google-booking.mjs';
 import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
@@ -64,6 +66,27 @@ export function invalidateViralState(){readSharedViralState.invalidate();}
 export async function loadViral(options:{share?:boolean;scope?:string;skipNotificationSync?:boolean}={}){
  if(options.scope&&!options.share)throw Error('Read scopes cannot be used for writes.');
  return {svc:viralService(),...await (options.share?readSharedViralState(options.scope||'full'):readFreshViralState(true,!options.skipNotificationSync))};
+}
+// --- Booking → CRM Google Sheet ------------------------------------------------------------
+// The app is the source of truth; the Sheet is a copy. Each instance remembers what it last wrote
+// so unchanged data costs nothing, and syncs run one at a time per instance.
+let lastBookingSheet='',bookingSheetQueue:Promise<unknown>=Promise.resolve();
+export function bookingSheetRows(rt:any):any[]|null{
+ const sheet=rt.data?.books?.main?.Bookings;if(!Array.isArray(sheet)||sheet.length<2)return null;
+ return rt.run('bookingSheetRows_',[],true);
+}
+export function syncBookingsToSheet(rows:any[]|null){
+ if(!rows)return Promise.resolve(false);
+ const hash=JSON.stringify(rows);if(hash===lastBookingSheet)return Promise.resolve(false);
+ const run=bookingSheetQueue.then(()=>hash===lastBookingSheet?null:syncBookingSheet(rows)).then(()=>{lastBookingSheet=hash;return true;});
+ bookingSheetQueue=run.catch(()=>{});return run;
+}
+/** After a successful save: write the Sheet once the response has been sent, so the user never waits. */
+function scheduleBookingSheet(rt:any){
+ let rows:any[]|null;try{rows=bookingSheetRows(rt);}catch(e){console.error('booking_sheet_rows',(e as Error).message);return;}
+ if(!rows||JSON.stringify(rows)===lastBookingSheet)return;
+ const task=()=>syncBookingsToSheet(rows).catch(e=>console.error('booking_sheet_sync',(e as Error).message));
+ try{after(task);}catch{void task();}
 }
 export function sameOrigin(req:Request){const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)throw Error('Nguồn yêu cầu không hợp lệ.');}
 export const makeEvents=(data:any)=>{
@@ -161,6 +184,7 @@ async function invokeViralOnce(method:string,args:any[],initData:string,user:any
     onFallback:()=>console.warn('viral_commit_patch missing: run supabase/viral-fast-commit.sql')})
   });
   readSharedViralState.invalidate();
+  scheduleBookingSheet(rt);
  }
  return result;
 }

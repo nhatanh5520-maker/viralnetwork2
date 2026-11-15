@@ -4,8 +4,10 @@
 // approves it (raw footage / hand-off are locked until then) -> normal production
 // -> after publishing, CC/VJ enter views/engagement (reminded after 48h) ->
 // Account confirms acceptance.
-const BOOKING_HEADERS=['id','production_id','brand','amount_vnd','acceptance_at','account_id','cc_id','vj_id','talent_id','script_status','script_url','script_note','script_submitted_at','script_reviewed_at','script_reviewed_by','views','likes','comments','shares','metrics_note','metrics_by','metrics_at','accepted_at','accepted_by','created_at','updated_at'];
+const BOOKING_HEADERS=['id','order_code','production_id','brand','amount_vnd','acceptance_at','account_id','cc_id','vj_id','talent_id','script_status','script_url','script_note','script_submitted_at','script_reviewed_at','script_reviewed_by','views','likes','comments','shares','metrics_note','metrics_by','metrics_at','accepted_at','accepted_by','created_at','updated_at'];
 var BOOKING_SKIP_LEADER=false;
+// True only while createBooking creates its video: lets a Director (otherwise read-only in production) create it.
+var BOOKING_DIRECTOR_CREATE=false;
 
 function bookingNormalize_(s){return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/đ/gi,'d').toLowerCase();}
 function bookingRoleText_(id){const p=person_(id);return bookingNormalize_([p?.job_title,p?.department].join(' '));}
@@ -14,6 +16,8 @@ function bookingIsAccountManager_(u){const t=bookingRoleText_(u.id);return /acco
 function bookingIsAccountant_(u){return String(setting_('accountant_telegram_id')||'')===String(u.id);}
 function bookingSeesAll_(u){return isDirector_(u)||role_(u.role)==='leader'||bookingIsAccountant_(u)||bookingIsAccountManager_(u);}
 function bookingSeesMoney_(u,b){return isDirector_(u)||bookingIsAccountant_(u)||bookingIsAccountManager_(u)||String(b.account_id)===String(u.id);}
+// Account staff and Directors create bookings; the creator then reviews the script and accepts the job.
+function bookingCanCreate_(u){return isDirector_(u)||bookingIsAccount_(u)||bookingIsAccountManager_(u);}
 function bookingCanManage_(u,b){return String(b.account_id)===String(u.id)||bookingIsAccountManager_(u);}
 
 // Read paths never create the sheet: a read must not change stored data.
@@ -50,7 +54,7 @@ function bookingStageLabel_(x){return ({brief:'Idea',script:'Kịch bản',shoot
 function bookingView_(u,b,x,team){
  const status=bookingStatus_(b,x),me=String(u.id),crew=bookingCrew_(b,x),manage=bookingCanManage_(u,b);
  const metricsDue=x&&x.published_at?new Date(Date.parse(x.published_at)+48*3600000).toISOString():'';
- const view={id:String(b.id),production_id:String(b.production_id),brand:String(b.brand),title:String(x?.title||''),project:String(x?.project||''),brief:String(x?.brief||''),
+ const view={id:String(b.id),order_code:bookingCode_(b),production_id:String(b.production_id),brand:String(b.brand),title:String(x?.title||''),project:String(x?.project||''),brief:String(x?.brief||''),
   shoot_at:String(x?.shoot_at||''),deliver_at:String(x?.deadline||''),acceptance_at:String(b.acceptance_at||''),
   account_id:String(b.account_id),cc_id:String(b.cc_id),vj_id:String(b.vj_id),talent_id:String(b.talent_id),editor_ids:x?teamIds_(x,'Editor',team):[],
   stage:String(x?.stage||''),stage_label:bookingStageLabel_(x),script_url:String(x?.script_url||''),script_status:String(b.script_status||'pending'),script_note:String(b.script_note||''),script_reviewed_at:String(b.script_reviewed_at||''),
@@ -65,13 +69,15 @@ function bookingScreenData_(u){
  const items=new Map(rows_('ProductionItems').map(x=>[String(x.id),x])),team=teamRows_(),me=String(u.id),all=bookingSeesAll_(u);
  const bookings=bookingTable_(false).list.map(f=>f.item).filter(b=>{if(all)return true;const x=items.get(String(b.production_id));return [b.account_id,b.cc_id,b.vj_id,b.talent_id,...(x?[x.cam_id,...teamIds_(x,'VJ',team),...teamIds_(x,'Editor',team)]:[])].map(String).includes(me);})
   .map(b=>bookingView_(u,b,items.get(String(b.production_id)),team)).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
- return {ok:true,bookings,canCreate:!isDirector_(u)&&(bookingIsAccount_(u)||bookingIsAccountManager_(u)),seesAll:all,seesMoney:isDirector_(u)||bookingIsAccountant_(u)||bookingIsAccountManager_(u)};
+ return {ok:true,bookings,canCreate:bookingCanCreate_(u),seesAll:all,seesMoney:isDirector_(u)||bookingIsAccountant_(u)||bookingIsAccountManager_(u)};
 }
 function bookingScreen(initData){const u=auth_(initData);return readScope_(()=>bookingScreenData_(u));}
 
 // --- Production integration -------------------------------------------------
 // Booking videos have no Leader Idea approval (the deal is closed), and the
 // Content Creator joins the VJ team even without a VJ job title.
+const bookingWritable_=productionWritable_;
+productionWritable_=function(u){if(BOOKING_DIRECTOR_CREATE&&isDirector_(u))return;return bookingWritable_(u);};
 const bookingLeaderCheck_=webRequireIdeaLeader_;
 webRequireIdeaLeader_=function(id){if(BOOKING_SKIP_LEADER&&!id)return;return bookingLeaderCheck_(id);};
 const bookingValidateAssignments_=validateProductionAssignments_;
@@ -109,10 +115,35 @@ function bookingScriptSaved_(initData,productionId){
  bookingNotify_(b,'script_submitted',[b.account_id],'📝 KỊCH BẢN BOOKING CHỜ DUYỆT\n'+head+'\n👉 Mở app → Booking để duyệt hoặc yêu cầu sửa.');
 }
 
+// Order code shown in the app and used as "Mã Đơn Hàng" in the CRM Google Sheet: BK + yyMMdd + -NN.
+// Unique: two creates on the same day conflict on the Bookings sheet and the loser re-reads.
+function bookingOrderCode_(t,iso){
+ const prefix='BK'+stamp_(new Date(iso),'yyyyMMdd').slice(2)+'-',taken=new Set(t.list.map(f=>String(f.item.order_code||'')));
+ for(let n=1;n<1000;n++){const code=prefix+String(n).padStart(2,'0');if(!taken.has(code))return code;}
+ throw Error('Quá nhiều booking trong ngày.');
+}
+function bookingCode_(b){return String(b.order_code||'')||'APP-'+String(b.id).replace(/^bk_/,'').slice(-8).toUpperCase();}
+
+// --- Google Sheet sync (internal; called by the server, never by the browser) --------------
+// One plain record per booking with the values written to the CRM order tab. Contains the amount,
+// so only server code may call it.
+function bookingSheetRows_(){return readScope_(()=>{
+ const items=new Map(rows_('ProductionItems').map(x=>[String(x.id),x])),team=teamRows_(),day=iso=>iso?stamp_(new Date(iso),'dd/MM/yyyy'):'',at=iso=>iso?stamp_(new Date(iso),'dd/MM/yyyy HH:mm'):'';
+ return bookingTable_(false).list.map(f=>{
+  const b=f.item,x=items.get(String(b.production_id)),status=bookingStatus_(b,x),metrics=!!b.metrics_at;
+  return {code:bookingCode_(b),date:day(b.created_at),brand:String(b.brand),project:String(x?.project||''),quantity:1,amount:Number(b.amount_vnd||0),
+   status:BOOKING_STATUS_LABELS[status]+(status==='production'&&bookingStageLabel_(x)?' · '+bookingStageLabel_(x):''),account:bookingName_(b.account_id),final_url:String(x?.final_url||''),
+   title:String(x?.title||''),cc:bookingName_(b.cc_id),vj:bookingName_(b.vj_id),talent:bookingName_(b.talent_id),editor:(x?teamIds_(x,'Editor',team):[]).map(bookingName_).filter(Boolean).join(', '),
+   shoot_at:at(x?.shoot_at),deliver_at:at(x?.deadline),acceptance_at:at(b.acceptance_at),script_url:String(x?.script_url||''),tiktok_url:String(x?.tiktok_url||''),facebook_url:String(x?.facebook_url||''),
+   views:metrics?Number(b.views||0):'',likes:metrics?Number(b.likes||0):'',comments:metrics?Number(b.comments||0):'',shares:metrics?Number(b.shares||0):'',
+   accepted_at:at(b.accepted_at),accepted_by:b.accepted_by?bookingName_(b.accepted_by):'',updated_at:at(b.updated_at)};
+ });
+});}
+
 // --- Actions ----------------------------------------------------------------
 function createBooking(initData,data){return createWriteScope_(()=>{
  const u=auth_(initData);
- if(isDirector_(u)||!(bookingIsAccount_(u)||bookingIsAccountManager_(u)))throw Error('Chỉ Account được tạo Booking.');
+ if(!bookingCanCreate_(u))throw Error('Chỉ Account hoặc Ban giám đốc được tạo Booking.');
  data=data||{};
  const requested=String(data.request_id||'');if(!/^[A-Za-z0-9_-]{16,100}$/.test(requested))throw Error('Mã yêu cầu không hợp lệ.');
  const brand=String(data.brand||'').trim(),brief=String(data.brief||'').trim(),project=String(data.project||'').trim(),title=String(data.title||'').trim()||('Booking · '+brand);
@@ -125,15 +156,15 @@ function createBooking(initData,data){return createWriteScope_(()=>{
  const cc=bookingPersonId_(data.cc_id,'Content Creator',true),vj=bookingPersonId_(data.vj_id,'VJ',true),talent=bookingPersonId_(data.talent_id,'Talent',true),editor=bookingPersonId_(data.editor_id,'Editor',false);
  const existing=bookingForProduction_(requested);
  if(existing){if(String(existing.item.account_id)!==String(u.id)||String(existing.item.brand)!==brand)throw Error('Mã yêu cầu đã dùng cho booking khác.');return {...bookingScreenData_(u),booking_id:String(existing.item.id),warning:''};}
- BOOKING_SKIP_LEADER=true;let created;
+  BOOKING_SKIP_LEADER=true;BOOKING_DIRECTOR_CREATE=isDirector_(u);let created;
  try{created=createProductionItemData_(initData,{project,title,brief,vj_id:cc,vj_ids:[...new Set([cc,vj])],editor_id:editor,editor_ids:editor?[editor]:[],cam_id:'',approver_id:'',shoot_at:shoot,request_id:requested,note:'Booking: '+brand});}
- finally{BOOKING_SKIP_LEADER=false;}
+ finally{BOOKING_SKIP_LEADER=false;BOOKING_DIRECTOR_CREATE=false;}
  const now=new Date().toISOString(),f=productionRow_(requested);
  v20Set_(f,'idea_approval','Duyệt');v20Set_(f,'idea_approval_reviewer',u.id);v20Set_(f,'idea_approval_reviewed_at',now);v20Set_(f,'idea_approval_feedback','Booking đã chốt với khách hàng');
  productionSet_(f,'stage','shoot');productionSet_(f,'deadline',deliver);
  const dept=person_(cc)?.department;if(dept)productionSet_(f,'department',String(dept));
  productionSet_(f,'updated_at',now);
- const t=bookingTable_(true),id='bk_'+requested,values={id,production_id:requested,brand,amount_vnd:amount,acceptance_at:acceptance,account_id:u.id,cc_id:cc,vj_id:vj,talent_id:talent,script_status:'pending',created_at:now,updated_at:now};
+ const t=bookingTable_(true),id='bk_'+requested,order_code=bookingOrderCode_(t,now),values={id,order_code,production_id:requested,brand,amount_vnd:amount,acceptance_at:acceptance,account_id:u.id,cc_id:cc,vj_id:vj,talent_id:talent,script_status:'pending',created_at:now,updated_at:now};
  t.sheet.appendRow(t.headers.map(k=>values[k]??''));
  const b={...values};
  bookingNotify_(b,'created',[cc,vj,talent,editor],'📌 BOOKING MỚI\nThương hiệu: '+brand+'\nNội dung: '+title+'\nNgày quay: '+bookingWhen_(shoot)+'\nTrả video: '+bookingWhen_(deliver)+'\nNghiệm thu: '+bookingWhen_(acceptance)+'\nAccount: '+bookingName_(u.id)+'\n👉 Mở app → Booking. CC/VJ lưu link kịch bản để Account duyệt trước khi quay.');
@@ -180,7 +211,7 @@ function acceptBooking(initData,bookingId){return createWriteScope_(()=>{
 
 // --- Reminders (run by the every-minute scheduler, 08:00-20:00 only) --------
 function bookingAlerts_(){
- const hm=stamp_(new Date(),'HH:mm');if(hm<'08:00'||hm>'20:00')return;
+ const hm=stamp_(new Date(),'HH:mm');if(hm<'08:00'||hm>='20:00')return; // 08:00–19:59
  const t=bookingTable_(false);if(!t.list.length)return;
  const now=Date.now(),day=stamp_(new Date(),'yyyy-MM-dd'),items=new Map(rows_('ProductionItems').map(x=>[String(x.id),x]));
  for(const f of t.list){

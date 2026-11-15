@@ -1,6 +1,6 @@
 import {NextResponse} from 'next/server';
 import crypto from 'node:crypto';
-import {viralService,loadViral,invalidateViralState} from '@/lib/viral';
+import {viralService,loadViral,bookingSheetRows,syncBookingsToSheet,invalidateViralState} from '@/lib/viral';
 import {createRuntime} from '../../../../../server/viral/runtime.mjs';
 import {telegramFailure} from '../../../../../server/viral/telegram-errors.mjs';
 import {drainNotifications} from '../../../../../server/viral/notification-worker.mjs';
@@ -30,6 +30,8 @@ export async function GET(req:Request){
    return state.svc.rpc('viral_commit',{expected_version:state.version,new_data:rt.data,events}).abortSignal(AbortSignal.timeout(10000));
   });
   if(changed&&committed)invalidateViralState();
+  // Retry path for the booking Sheet copy: a no-op when this instance already wrote the same data.
+  try{phase='booking_sheet';await syncBookingsToSheet(bookingSheetRows(rt));}catch(e){console.error('booking_sheet_sync',(e as Error).message);}
   // A scheduler CAS conflict must not block delivery of already committed events.
   const svc=viralService(),errors=new Set<string>();
   const counts=await drainNotifications({deadline:workerDeadline,
