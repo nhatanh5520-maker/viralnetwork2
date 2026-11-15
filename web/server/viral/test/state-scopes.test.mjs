@@ -68,3 +68,19 @@ test('large unrelated history is excluded before transmission in scoped reads',(
  const full=Buffer.byteLength(JSON.stringify(data)),attendance=Buffer.byteLength(JSON.stringify(projectState(data,'attendance'))),production=Buffer.byteLength(JSON.stringify(projectState(data,'production')));
  assert.ok(attendance<full/20);assert.ok(production<full/20);
 });
+test('bookingScreen scoped results and money visibility match full state for all roles',()=>{
+ let data=fixture();const table=data.books.main.Employees;
+ table.push(table[0].map(k=>({telegram_id:'1007',name:'Account',role:'employee',department:'Kinh doanh',job_title:'Account',active:'true'}[k]||'')));
+ const rt=createRuntime(data,{employeeId:'1007'}),day=new Date(Date.now()+86400000).toISOString();
+ rt.run('createBooking',['supabase',{project:'VN - Viral',brand:'Thương hiệu A',brief:'Brief booking',amount_vnd:15000000,shoot_at:day,deliver_at:day,acceptance_at:day,cc_id:'1004',vj_id:'1004',talent_id:'1002',request_id:'scope-booking-1234567'}]);data=rt.data;
+ const scope=scopeForMethod('bookingScreen');assert.equal(scope,'bookings');let seen=0;
+ for(const employeeId of ['1001','1002','1003','1004','1005','1006','1007','9999']){
+  const full=createRuntime(data,{employeeId}),partial=projectState(data,scope),before=JSON.stringify(partial),scoped=createRuntime(partial,{employeeId},{READ_TABLES:scopeConfig(scope).tables});
+  let a,b,ae,be;try{a=full.run('bookingScreen',['supabase']);}catch(e){ae=e.message;}
+  try{b=scoped.run('bookingScreen',['supabase']);}catch(e){if(e instanceof ReadScopeMiss)throw Error('bookingScreen missing dependency: '+e.table);be=e.message;}
+  assert.equal(be,ae,employeeId+' permission mismatch');assert.equal(JSON.stringify(b),JSON.stringify(a),employeeId+' data mismatch');
+  assert.equal(JSON.stringify(scoped.data),before,employeeId+' read unexpectedly changed state');
+  if(a?.bookings?.length)seen++;
+ }
+ assert.ok(seen>=3,'booking must be visible to several roles');
+});

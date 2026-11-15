@@ -101,5 +101,10 @@
   "updateProductionThumbnail",
   "updateV20ExpenseBank",
   "updateWebProject",
-  "v20ExpenseStatus"
+  "v20ExpenseStatus",
+  "bookingScreen",
+  "createBooking",
+  "reviewBookingScript",
+  "submitBookingMetrics",
+  "acceptBooking"
 ]

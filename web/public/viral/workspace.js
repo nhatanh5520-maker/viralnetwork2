@@ -94,7 +94,7 @@ homeView=function(){
 function workspaceShell(){
  if(!state?.user)return;
  let sidebar=$('workspaceSidebar');if(!sidebar){sidebar=document.createElement('aside');sidebar.id='workspaceSidebar';document.body.prepend(sidebar);}
- const labels=[['home','Trang chủ'],['attendance','Chấm công'],['production','Sản xuất'],['tasks','Công việc'],['utilities','Tiện ích'],['news','Bảng tin']];
+ const labels=[['home','Trang chủ'],['attendance','Chấm công'],['production','Sản xuất'],['tasks','Công việc'],['utilities','Tiện ích'],['bookings','Booking']];
  sidebar.innerHTML='<a class="workspace-brand" href="/"><img class="workspace-company-logo" src="/viral/company-logo.webp" alt="Logo Viral Network" width="210" height="114" decoding="async"></a><div class="workspace-studio workspace-slogan" aria-label="Slogan công ty"><strong>Nội Dung Thật</strong><strong>Giá Trị Thật</strong><strong>Kết Quả Thật</strong></div><nav aria-label="Menu chính">'+labels.map(([id,label])=>'<button data-workspace-tab="'+id+'" class="'+(tab===id?'on':'')+'">'+icon(id)+'<span>'+label+'</span></button>').join('')+'</nav><div class="workspace-sidebar-footer"><span class="live-dot"></span> Không gian làm việc của bạn<br><button data-workspace-profile>Hồ sơ cá nhân ↗</button></div>';
  sidebar.querySelectorAll('[data-workspace-tab]').forEach(b=>b.onclick=()=>go(b.dataset.workspaceTab));sidebar.querySelector('[data-workspace-profile]').onclick=()=>go('profile');
  let top=$('workspaceTopbar');if(!top){top=document.createElement('div');top.id='workspaceTopbar';document.querySelector('.hero').prepend(top);}
