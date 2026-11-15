@@ -102,4 +102,7 @@ test('scheduler reminds CC/VJ 48h after publishing, once per day, only in workin
  const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Ho_Chi_Minh',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
  run();run();
  if(hour>=8&&hour<20)assert.equal(count(),2,'CC and VJ once each');else assert.equal(count(),0,'no reminders at night');
+ // Sent once in total, not once a day: the key carries no date, and the scheduler skips keys it has seen.
+ const keys=a.data.books.main.Notifications.slice(1).map(r=>String(r[1])).filter(k=>k.includes(':metrics_reminder:'));
+ for(const k of keys)assert.doesNotMatch(k,/\d{4}-\d{2}-\d{2}/,'reminder key must not contain a date');
 });

@@ -185,7 +185,8 @@ function bookingAlerts_(){
  const now=Date.now(),day=stamp_(new Date(),'yyyy-MM-dd'),items=new Map(rows_('ProductionItems').map(x=>[String(x.id),x]));
  for(const f of t.list){
   const b=f.item,x=items.get(String(b.production_id));if(!x||b.accepted_at)continue;const status=bookingStatus_(b,x);
-  if(status==='metrics'){const published=Date.parse(x.published_at);if(published&&now-published>=48*3600000)bookingCrew_(b,x).forEach(who=>queueNotification_('booking:'+b.id+':metrics_reminder:'+day+':'+who,who,'⏰ NHẮC NHẬP SỐ LIỆU BOOKING\nThương hiệu: '+b.brand+'\nNội dung: '+x.title+'\nVideo đã đăng lúc '+bookingWhen_(x.published_at)+'\n👉 Mở app → Booking, nhập view, thích, bình luận, chia sẻ.'));}
+  // Metrics reminder: once per person (no date in the key, so later days do not repeat it).
+  if(status==='metrics'){const published=Date.parse(x.published_at);if(published&&now-published>=48*3600000)bookingCrew_(b,x).forEach(who=>queueNotification_('booking:'+b.id+':metrics_reminder:'+who,who,'⏰ NHẮC NHẬP SỐ LIỆU BOOKING\nThương hiệu: '+b.brand+'\nNội dung: '+x.title+'\nVideo đã đăng lúc '+bookingWhen_(x.published_at)+'\n👉 Mở app → Booking, nhập view, thích, bình luận, chia sẻ.'));}
   const acceptance=Date.parse(b.acceptance_at);
   if(acceptance&&now>acceptance)queueNotification_('booking:'+b.id+':acceptance_late:'+day+':'+b.account_id,b.account_id,'🔴 BOOKING QUÁ NGÀY NGHIỆM THU\nThương hiệu: '+b.brand+'\nNội dung: '+x.title+'\nNgày nghiệm thu: '+bookingWhen_(b.acceptance_at)+'\nTrạng thái: '+BOOKING_STATUS_LABELS[status]);
  }
