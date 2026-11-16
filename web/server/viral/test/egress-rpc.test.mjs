@@ -8,6 +8,7 @@ import {initializeData,createRuntime} from '../runtime.mjs';
 import {scopeConfig,ReadScopeMiss} from '../state-scopes.mjs';
 import {ViralVersionConflict} from '../approval-retry.mjs';
 import {applyCommitPatch} from '../patch-commit.mjs';
+import {readTablesResult} from '../state-scopes.mjs';
 const sourceURL=new URL('../../../src/lib/viral.ts',import.meta.url);
 const compiled=ts.transpileModule(fs.readFileSync(sourceURL,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
 const actualRequire=createRequire(sourceURL);
@@ -17,7 +18,8 @@ function fixture(){
  for(const [k,v] of [['office_lat','16.0544'],['office_lng','108.2022'],['radius_m','100']]){const r=data.books.main.Settings.find(r=>r[0]===k);if(r)r[1]=v;else data.books.main.Settings.push([k,v]);}
  return data;
 }
-function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null,outboxFault=null,uncertainCommit=false}={}){
+// readTables: emulate supabase/viral-read-perf.sql being installed; otherwise viral_read_tables is missing (PGRST202).
+function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null,outboxFault=null,uncertainCommit=false,readTables=false}={}){
  // log mirrors viral_state_log: writes made outside the commit functions are unknown ('*').
  let state=fixture(),version=1,interfere=null,log=[];const queries=[],commits=[],bookingReads=[],outboxReads=[];
  class Query{
@@ -37,7 +39,15 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
   }
   then(resolve,reject){if(this.table==='viral_outbox')outboxReads.push(this.columns);return Promise.resolve({data:[],error:this.table==='viral_outbox'?outboxFault:null}).then(resolve,reject);}
  }
- const svc={from:table=>new Query(table),rpc:async(name,args)=>{
+ const readTablesRpc=async args=>{
+  const label='rpc:viral_read_tables:'+args.tables.join('|');queries.push(label);
+  if(!readTables)return {data:null,error:{code:'PGRST202',message:'Could not find the function public.viral_read_tables'}};
+  const fault=readFault?.(label,queries);if(fault)return {data:null,error:typeof fault==='string'?{code:fault}:fault};
+  return {data:readTablesResult(state,version,args.tables,args.include_files),error:null};
+ };
+ const withAbort=promise=>Object.assign(promise,{abortSignal(){return promise;}});
+ const svc={from:table=>new Query(table),rpc:(name,args)=>withAbort(name==='viral_read_tables'?readTablesRpc(args):commitRpc(name,args))};
+ const commitRpc=async(name,args)=>{
   assert.ok(['viral_commit','viral_commit_patch'].includes(name));commits.push({...args,rpc:name});
   if(interfere){const operation=interfere;interfere=null;state=operation(state);version++;log.push({version,keys:['*']});}
   if(name==='viral_commit'){
@@ -48,7 +58,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
   if(!saved)return {data:0,error:null};
   state=saved.state;version=saved.version;log.push({version,keys:saved.keys});
   return uncertainCommit?{data:null,error:{message:'response lost'}}:{data:version,error:null};
- }};
+ };
  const exports={},sandbox={exports,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://test.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'test'}},Buffer,AbortSignal,setTimeout,console:{warn(){},error(){}},require:id=>{
   if(id==='server-only')return {};
   if(id.endsWith('/google-booking.mjs'))return {readBookingBook:async options=>{bookingReads.push(options);if(!bookingBook)throw Error('Unexpected Google read');return structuredClone(bookingBook);}};
@@ -156,12 +166,14 @@ test('checkout retries a transient full-state fetch once and persists exactly on
  const result=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);assert.ok(result.attendance.check_out);assert.equal(result.attendance.check_in,first.attendance.check_in);assert.equal(h.commits.length,2);
  const repeated=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);assert.equal(repeated.already,true);assert.equal(h.commits.length,2);
 });
-test('attendance does not depend on outbox reconciliation, retains pending events and uses complete fresh state',async()=>{
+// Older pending rows are not re-sent with every save any more (they made each check-in commit heavy); the
+// minute cron hands every pending row to viral_outbox. A save carries only the notifications it created.
+test('attendance does not depend on outbox reconciliation, leaves older pending events to the cron and uses complete fresh state',async()=>{
  const h=harness({outboxFault:{code:'',message:'TypeError: fetch failed'}});h.externalWrite(data=>pendingNotification(fieldReady(data)));
  const point={mode:'office',lat:16.0544,lng:108.2022,accuracy:10},user={employeeId:'1004'};
  await h.api.invokeViral('fieldAttendance',['in',point],'supabase',user);const result=await h.api.invokeViral('fieldAttendance',['out',point],'supabase',user);
  assert.ok(result.attendance.check_out);assert.equal(h.outboxReads.length,0);assert.equal(h.getState().books.main.Notifications.length,2);
- assert.ok(h.commits.at(-1).events.some(x=>x.id==='notification:pending-test'));assert.equal(h.queries.filter(x=>x==='data,version').length,2);
+ assert.ok(!h.commits.at(-1).events.some(x=>x.id==='notification:pending-test'),'older pending rows stay for the cron');assert.equal(h.queries.filter(x=>x==='data,version').length,2);
  await assert.rejects(h.api.loadViral(),e=>e.code==='STATE_NETWORK'&&e.stage==='notifications');assert.equal(h.outboxReads.length,1,'other callers keep reconciliation');
 });
 test('lost commit response is never replayed automatically and status read can confirm the saved checkout',async()=>{
@@ -178,4 +190,25 @@ test('attendance status retries a scoped network read and its cancellation fallb
  await h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});assert.equal(h.queries.filter(x=>x.includes('s0:')).length,2);assert.ok(!h.queries.includes('data,version'));
  const fallback=harness({readFault:columns=>columns.includes('s0:')?'57014':null,outboxFault:{code:'42501'}});fallback.externalWrite(pendingNotification);
  const result=await fallback.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});assert.equal(result.attendance,null);assert.equal(fallback.outboxReads.length,0);assert.equal(fallback.commits.length,0);
+});
+
+test('with viral-read-perf.sql installed, scoped reads use viral_read_tables and return the same data',async()=>{
+ const fast=harness({readTables:true}),slow=harness();
+ for(const h of [fast,slow])await h.api.invokeViral('attendance',['in',16.0544,108.2022,10],'supabase',{employeeId:'1004'});
+ const read=h=>h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});
+ const a=await read(fast),b=await read(slow);
+ assert.equal(a.attendance.telegram_id,'1004');assert.deepEqual({...a.attendance,id:'',check_in:''},{...b.attendance,id:'',check_in:''},'same data except the random row id and the clock');
+ assert.ok(fast.queries.some(q=>q.startsWith('rpc:viral_read_tables:')),'reads through the function');
+ assert.ok(!fast.queries.some(q=>q.includes('s0:')),'no per-table projection');
+ assert.ok(slow.queries.some(q=>q.includes('s0:')),'without the function the projection is used');
+ assert.equal(slow.queries.filter(q=>q.startsWith('rpc:viral_read_tables')).length,1,'a missing function is probed once, then remembered');
+ await read(slow);assert.equal(slow.queries.filter(q=>q.startsWith('rpc:viral_read_tables')).length,1);
+});
+test('viral_read_tables: a cancelled read falls back to a full read; a permission error does not',async()=>{
+ const cancelled=harness({readTables:true,readFault:q=>q.startsWith('rpc:viral_read_tables')?'57014':null});
+ const r=await cancelled.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});
+ assert.equal(r.attendance,null);assert.ok(cancelled.queries.includes('data,version'),'falls back to the complete read');assert.equal(cancelled.commits.length,0);
+ const denied=harness({readTables:true,readFault:q=>q.startsWith('rpc:viral_read_tables')?'42501':null});
+ await assert.rejects(denied.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'}),/quyền/);
+ assert.ok(!denied.queries.includes('data,version'),'permission errors are not hidden by another read path');
 });
