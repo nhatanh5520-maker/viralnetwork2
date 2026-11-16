@@ -96,11 +96,19 @@ test('actual check-in ignores read cache, reloads on CAS conflict and preserves 
  // A read after the commit rechecks the version and reflects the saved check-in.
  const current=await h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'});assert.equal(current.attendance.telegram_id,'1004');
 });
-test('actual task creation reports a version conflict without overwriting another task',async()=>{
+test('actual task creation retries a version conflict on fresh data and keeps the other task',async()=>{
  const h=harness();await h.api.invokeViral('productionScreen',[{}],'supabase',{employeeId:'1001'});
  h.duringCommit(data=>{data.books.main.Tasks.push(['remote-task']);return data;});
- await assert.rejects(h.api.invokeViral('createProductionItem',[{project:'VN - Viral',title:'Idea mới',brief:'Brief',vj_id:'1004',editor_id:'1002',approver_id:'1001',request_id:'cache-write-123456'}],'supabase',{employeeId:'1001'}),ViralVersionConflict);
- assert.equal(h.commits.length,1);assert.equal(h.getState().books.main.Tasks.at(-1)[0],'remote-task');assert.equal(h.getState().books.main.ProductionItems.length,1);
+ const result=await h.api.invokeViral('createProductionItem',[{project:'VN - Viral',title:'Idea mới',brief:'Brief',vj_id:'1004',editor_id:'1002',approver_id:'1001',request_id:'cache-write-123456'}],'supabase',{employeeId:'1001'});
+ assert.equal(result.ok,true);assert.equal(h.commits.length,2,'first commit rejected, second on fresh data');
+ const state=h.getState();assert.ok(state.books.main.Tasks.some(r=>r[0]==='remote-task'),'the concurrent task is not overwritten');
+ assert.equal(state.books.main.ProductionItems.length,2,'the idea is saved exactly once');
+});
+test('a save that keeps conflicting stops after 3 attempts and reports it',async()=>{
+ const h=harness();let left=3;
+ const again=()=>h.duringCommit(data=>{data.books.main.Tasks.push(['remote-'+left]);if(--left>0)queueMicrotask(again);return data;});again();
+ await assert.rejects(h.api.invokeViral('createProductionItem',[{project:'VN - Viral',title:'Idea',brief:'Brief',vj_id:'1004',editor_id:'1002',approver_id:'1001',request_id:'cache-write-654321'}],'supabase',{employeeId:'1001'}),ViralVersionConflict);
+ assert.equal(h.commits.length,3,'three attempts');assert.equal(h.getState().books.main.ProductionItems.length,1,'nothing saved');
 });
 test('a future read dependency retries with a fresh full snapshot, not a partial commit',async()=>{
  const h=harness({dependencyMiss:true});const result=await h.api.invokeViral('productionScreen',[{}],'supabase',{employeeId:'1001'});
