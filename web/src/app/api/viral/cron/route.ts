@@ -44,10 +44,11 @@ export async function GET(req:Request){
    if(recent.length){const {error}=await viralService().from('viral_outbox').upsert(recent.map((e:any)=>({id:e.id,chat_id:e.chat_id,body:e.text,photo_file_id:e.photo_file_id})),{onConflict:'id',ignoreDuplicates:true}).abortSignal(AbortSignal.timeout(8000));if(error)throw error;}
   }
   // Keep the state small: clear the text of notifications delivered more than 3 days ago (rows and
-  // event keys stay for de-duplication). Runs when enough rows piled up, at most every 20 minutes.
+  // event keys stay for de-duplication). The trim rewrites the Notifications sheet, which makes saves
+  // running at that moment retry, so it runs at night (00:00-04:59), or in the day only for a large backlog.
   let trimmed=0;
   const candidates=trimCandidates(rt.data.books.main.Notifications),vnHour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Ho_Chi_Minh',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
-  if((candidates>=200||vnHour<5&&candidates>0)&&Date.now()-lastTrimAt>20*60000){
+  if((candidates>=1000||vnHour<5&&candidates>0)&&Date.now()-lastTrimAt>20*60000){
    lastTrimAt=Date.now();phase='trim_notifications';
    const fresh=await loadViral(),cut=trimNotifications(fresh.data.books.main.Notifications);
    if(cut){

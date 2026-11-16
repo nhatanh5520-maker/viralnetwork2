@@ -31,8 +31,8 @@ test('an approval already committed by another request stops without duplicate n
 test('network, database and business errors are never automatically retried',async()=>{
  for(const error of [Error('network timeout'),Error('database error'),Error('Không có quyền')]){let calls=0;await assert.rejects(withIdeaApprovalRetry('decideProductionApproval',async()=>{calls++;throw error;}),e=>e===error);assert.equal(calls,1);}
 });
-test('retry is bounded and does not broaden to other mutations',async()=>{
- for(const [method,expected] of [['decideProductionApproval',3],['createProductionItem',1]]){let calls=0;await assert.rejects(withIdeaApprovalRetry(method,async()=>{calls++;throw new ViralVersionConflict();}),ViralVersionConflict);assert.equal(calls,expected);}
+test('every save retries a bounded number of times after a version conflict',async()=>{
+ for(const [method,expected] of [['decideProductionApproval',3],['createProductionItem',3],['saveProductionAsset',3],['attendance',6]]){let calls=0;await assert.rejects(withIdeaApprovalRetry(method,async()=>{calls++;throw new ViralVersionConflict();},{pause:async()=>{}}),ViralVersionConflict);assert.equal(calls,expected);}
 });
 
 test('the actual UI approval method retries the same signed snapshot after an unrelated CAS rejection',async()=>{
