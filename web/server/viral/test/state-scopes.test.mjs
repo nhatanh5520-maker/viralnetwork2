@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createClient} from '@supabase/supabase-js';
 import {initializeData,createRuntime} from '../runtime.mjs';
-import {READ_SCOPES,scopeForMethod,scopeConfig,scopeSelect,scopedState,projectState,ReadScopeMiss} from '../state-scopes.mjs';
+import {READ_SCOPES,scopeForMethod,scopeConfig,scopeSelect,scopedState,scopedStateFromTables,readTablesResult,projectState,ReadScopeMiss} from '../state-scopes.mjs';
 function fixture(){
  let data=initializeData();const table=data.books.main.Employees;
  for(const [id,name,role,department] of [['1001','Leader Content','leader','Content'],['1002','Editor','employee','Media'],['1003','Giám đốc','director','BGĐ'],['1004','VJ','employee','Content'],['1005','Nhân sự','employee','HR'],['1006','Kế toán','employee','Kế toán']])table.push(table[0].map(k=>({telegram_id:id,name,role,department,active:'true',job_title:id==='1004'?'VJ':id==='1002'?'Editor':department}[k]||'')));
@@ -83,4 +83,13 @@ test('bookingScreen scoped results and money visibility match full state for all
   if(a?.bookings?.length)seen++;
  }
  assert.ok(seen>=3,'booking must be visible to several roles');
+});
+
+test('viral_read_tables results build exactly the same snapshot as the per-table projection for every scope',()=>{
+ const data=fixture();
+ for(const [scope,config] of Object.entries(READ_SCOPES)){
+  const fast=scopedStateFromTables(readTablesResult(data,7,config.tables,!!config.files),scope);
+  assert.equal(fast.version,7);assert.deepEqual(fast.data,projectState(data,scope),scope);
+ }
+ assert.throws(()=>scopedStateFromTables(null,'home'));
 });

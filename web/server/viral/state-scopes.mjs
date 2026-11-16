@@ -49,6 +49,21 @@ export function scopedState(row,scope){
  if(row.archive!=null)data.attendanceArchive=row.archive;
  return {data,version:row.version};
 }
+/**
+ * Converts the result of the viral_read_tables SQL function into the same snapshot as the per-table
+ * JSON projection (scopedState). The function decompresses the stored document once instead of once per table.
+ */
+export function scopedStateFromTables(result,scope){
+ if(!result||typeof result!=='object'||typeof result.tables!=='object')throw Error('Invalid read_tables result');
+ const config=scopeConfig(scope),row={version:result.version,properties:result.properties,archive:result.archive??null,files:result.files??null};
+ config.tables.forEach((name,i)=>{row['s'+i]=Object.hasOwn(result.tables,name)?result.tables[name]:null;});
+ return scopedState(row,scope);
+}
+// JavaScript mirror of viral_read_tables, for tests.
+export function readTablesResult(data,version,tables,includeFiles=false){
+ const main=data.books?.main||{};
+ return structuredClone({version,properties:data.properties||{},archive:data.attendanceArchive??null,files:includeFiles?(data.files||{}):null,tables:Object.fromEntries(tables.filter(t=>Object.hasOwn(main,t)).map(t=>[t,main[t]]))});
+}
 // Mirrors server JSON selection for runtime regression tests and measurements.
 export function projectState(data,scope){
  const config=scopeConfig(scope),row={properties:data.properties,archive:data.attendanceArchive,files:data.files,version:0};
