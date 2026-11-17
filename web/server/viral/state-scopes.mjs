@@ -19,7 +19,9 @@ export const READ_SCOPES=Object.freeze({
  projectFile:{tables:unique([...common,'Projects']),files:true},
  avatarFile:{tables:unique([...common,'UserAvatars']),files:true},
  // Bookings: the scheduler sends booking reminders; bookingScreen lists bookings with their videos.
- scheduler:{tables:unique([...common,...production,...attendance,'Notifications','Bookings'])},
+ scheduler:{tables:unique([...common,...production,...attendance,'Notifications','Bookings','ProjectChannels','ChannelMetrics'])},
+ // Số liệu kênh: projects come from Projects + ProductionItems (legacy project labels).
+ channels:{tables:unique([...common,'Projects','ProductionItems','ProjectChannels','ChannelMetrics'])},
  bookings:{tables:unique([...common,...production,'Bookings'])},
  deliveryFiles:{tables:unique([]),files:true},
 });
@@ -27,7 +29,7 @@ const methods=Object.freeze({
  fieldAttendanceOptions:'attendanceOptions',snapshotAttendance:'attendance',attendanceStatus:'attendance',managerAttendanceDay:'attendance',fieldReviewData:'attendance',fieldAttendanceReport:'attendance',fieldConfig:'attendance',
  productionPage:'production',productionScreen:'production',staffProductionWorkload:'production',
  snapshotHome:'home',snapshotCore:'core',snapshotManager:'manager',reviewQueue:'review',
- accountingExpenses:'expenses',bookingScreen:'bookings',avatarBatch:'avatars',personnelDirectory:'personnel',bookingReport:'personnel',
+ accountingExpenses:'expenses',channelMetricsScreen:'channels',channelMetricsReport:'channels',exportChannelMetrics:'channels',bookingScreen:'bookings',avatarBatch:'avatars',personnelDirectory:'personnel',bookingReport:'personnel',
 });
 export function scopeForMethod(method){return Object.hasOwn(methods,method)?methods[method]:null;}
 export class ReadScopeMiss extends Error {
@@ -48,6 +50,21 @@ export function scopedState(row,scope){
  const data={books:{main},properties:row.properties||{},files:config.files?(row.files||{}):{},outbox:[]};
  if(row.archive!=null)data.attendanceArchive=row.archive;
  return {data,version:row.version};
+}
+/**
+ * Converts the result of the viral_read_tables SQL function into the same snapshot as the per-table
+ * JSON projection (scopedState). The function decompresses the stored document once instead of once per table.
+ */
+export function scopedStateFromTables(result,scope){
+ if(!result||typeof result!=='object'||typeof result.tables!=='object')throw Error('Invalid read_tables result');
+ const config=scopeConfig(scope),row={version:result.version,properties:result.properties,archive:result.archive??null,files:result.files??null};
+ config.tables.forEach((name,i)=>{row['s'+i]=Object.hasOwn(result.tables,name)?result.tables[name]:null;});
+ return scopedState(row,scope);
+}
+// JavaScript mirror of viral_read_tables, for tests.
+export function readTablesResult(data,version,tables,includeFiles=false){
+ const main=data.books?.main||{};
+ return structuredClone({version,properties:data.properties||{},archive:data.attendanceArchive??null,files:includeFiles?(data.files||{}):null,tables:Object.fromEntries(tables.filter(t=>Object.hasOwn(main,t)).map(t=>[t,main[t]]))});
 }
 // Mirrors server JSON selection for runtime regression tests and measurements.
 export function projectState(data,scope){

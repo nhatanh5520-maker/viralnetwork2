@@ -19,6 +19,8 @@
    const pages=Math.max(1,Math.ceil((state.productionPage?.items?.length||0)/20));
    refreshing=true;try{for(let page=0;page<pages;page++){if(!await loadProductionPage(page,page>0,true,!manual))return false;if(!state.productionPage?.hasMore)break;}return true;}finally{refreshing=false;}
   }
+  // true = refreshed, false = failed, null = deferred while the person is typing (stays pending).
+  if(tab==='channelMetrics')return window.channelMetricsRefresh?window.channelMetricsRefresh(manual):true;
   if(tab==='fieldReview'){await fieldReviewView();return true;}if(tab==='fieldReport'){await fieldReportView();return true;}if(tab==='performance'){await performanceView();return true;}
   const ok=await refreshSnapshot(manual);if(ok&&tab==='staff')await loadStaffWorkload(true);return ok;
  }

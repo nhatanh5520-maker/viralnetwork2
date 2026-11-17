@@ -4,9 +4,12 @@ import {viralService,loadViral,bookingSheetRows,syncBookingsToSheet,invalidateVi
 import {createRuntime} from '../../../../../server/viral/runtime.mjs';
 import {telegramFailure} from '../../../../../server/viral/telegram-errors.mjs';
 import {drainNotifications} from '../../../../../server/viral/notification-worker.mjs';
-import {commitSchedulerState,prepareScheduler} from '../../../../../server/viral/scheduler-commit.mjs';
+import {prepareScheduler} from '../../../../../server/viral/scheduler-commit.mjs';
+import {commitChanges} from '../../../../../server/viral/patch-commit.mjs';
+import {pendingNotificationEvents,trimCandidates,trimNotifications} from '../../../../../server/viral/notification-store.mjs';
 import {scopeConfig} from '../../../../../server/viral/state-scopes.mjs';
 export const runtime='nodejs';export const maxDuration=60;
+let lastTrimAt=0;
 export async function GET(req:Request){
  if(process.env.VIRAL_MAINTENANCE==='true')return NextResponse.json({error:'Tạm dừng để chuyển dữ liệu.'},{status:503});
  const secret=process.env.CRON_SECRET,provided=Buffer.from(req.headers.get('authorization')||''),expected=Buffer.from(`Bearer ${secret||''}`);
@@ -23,15 +26,40 @@ export async function GET(req:Request){
     result.run('v16Scheduler',[],true);return result;
    },
   });
-  const h=rt.data.books.main.Notifications[0],events=rt.data.books.main.Notifications.slice(1).map((r:any)=>Object.fromEntries(h.map((k:string,i:number)=>[k,r[i]]))).filter((r:any)=>['pending','failed'].includes(r.status)).map((r:any)=>({id:'notification:'+r.id,chat_id:String(r.telegram_id),text:String(r.message),photo_file_id:r.photo_file_id||null}));
-  events.push(...rt.data.outbox.filter((r:any)=>r.status==='pending').map((r:any)=>({id:r.id,chat_id:r.chatId,text:r.text,photo_file_id:null})));
-  phase='commit_scheduler';const {committed,changed}=await commitSchedulerState(state.data,rt.data,()=>{
-   if(!full)throw Error('Không được ghi từ dữ liệu kiểm tra lịch.');
-   return state.svc.rpc('viral_commit',{expected_version:state.version,new_data:rt.data,events}).abortSignal(AbortSignal.timeout(10000));
-  });
+  // Save only what the scheduler changed (viral_commit_patch), not the whole document.
+  phase='commit_scheduler';let changed=false,committed=true;
+  if(full){
+   const changes=rt.changes(state.data);
+   if(changes.patches.length||changes.outboxDone.length){
+    changed=true;
+    const saved:any=await commitChanges({rpc:(name:string,params:any)=>state.svc.rpc(name,params).abortSignal(AbortSignal.timeout(10000)),version:state.version,changes,events:pendingNotificationEvents(rt.data),fullData:()=>rt.data});
+    if(saved.error)throw saved.error;committed=saved.data===true;
+   }
+  }
   if(changed&&committed)invalidateViralState();
   // Retry path for the booking Sheet copy: a no-op when this instance already wrote the same data.
   try{phase='booking_sheet';await syncBookingsToSheet(bookingSheetRows(rt));}catch(e){console.error('booking_sheet_sync',(e as Error).message);}
+  // Safety net: saves only hand over the notifications they create, so make sure recent pending rows are
+  // queued even when nothing was committed. Rows already in viral_outbox are left untouched (no resend).
+  if(!(changed&&committed)){
+   phase='queue_pending';const recent=pendingNotificationEvents(rt.data,{since:Date.now()-2*86400000});
+   if(recent.length){const {error}=await viralService().from('viral_outbox').upsert(recent.map((e:any)=>({id:e.id,chat_id:e.chat_id,body:e.text,photo_file_id:e.photo_file_id})),{onConflict:'id',ignoreDuplicates:true}).abortSignal(AbortSignal.timeout(8000));if(error)throw error;}
+  }
+  // Keep the state small: clear the text of notifications delivered more than 3 days ago (rows and
+  // event keys stay for de-duplication). The trim rewrites the Notifications sheet, which makes saves
+  // running at that moment retry, so it runs at night (00:00-04:59), or in the day only for a large backlog.
+  let trimmed=0;
+  const candidates=trimCandidates(rt.data.books.main.Notifications),vnHour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Ho_Chi_Minh',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
+  if((candidates>=1000||vnHour<5&&candidates>0)&&Date.now()-lastTrimAt>20*60000){
+   lastTrimAt=Date.now();phase='trim_notifications';
+   const fresh=await loadViral(),cut=trimNotifications(fresh.data.books.main.Notifications);
+   if(cut){
+    const key='books/main/Notifications',next={...fresh.data,books:{...fresh.data.books,main:{...fresh.data.books.main,Notifications:cut.sheet}}};
+    const saved:any=await commitChanges({rpc:(name:string,params:any)=>fresh.svc.rpc(name,params).abortSignal(AbortSignal.timeout(10000)),version:fresh.version,
+     changes:{reads:[key,key+'#rows'],writes:[key],patches:[{path:['books','main','Notifications'],value:cut.sheet}],outboxDone:[]},events:[],fullData:()=>next});
+    if(saved.error)throw saved.error;if(saved.data){trimmed=cut.trimmed;invalidateViralState();}
+   }
+  }
   // A scheduler CAS conflict must not block delivery of already committed events.
   const svc=viralService(),errors=new Set<string>();
   const counts=await drainNotifications({deadline:workerDeadline,
@@ -54,6 +82,6 @@ export async function GET(req:Request){
     const {error}=await svc.from('viral_outbox').update({status:'sending',lease_until:new Date(Date.now()+retryAfter*1000).toISOString(),last_error:message}).eq('id',m.id).eq('status','sending').abortSignal(AbortSignal.timeout(7000));if(error)throw error;},
    defer:async(m:any)=>{const {error}=await svc.from('viral_outbox').update({status:'pending',lease_until:null,attempts:Math.max(0,Number(m.attempts||1)-1)}).eq('id',m.id).eq('status','sending').abortSignal(AbortSignal.timeout(7000));if(error)throw error;}
   });
-  return NextResponse.json({ok:true,...counts,schedulerBusy:!committed,errors:[...errors]});
+  return NextResponse.json({ok:true,...counts,schedulerBusy:!committed,trimmedNotifications:trimmed,errors:[...errors]});
  }catch(e){const raw=String((e as any)?.code||''),code=/^(?:[0-9A-Z]{5}|PGRST[0-9]{3}|STATE_READ)$/.test(raw)?raw:'CRON_ERROR';console.error('viral_cron_failed',{phase,code,elapsedMs:Date.now()-began});return NextResponse.json({error:e instanceof Error?e.message:'Không xử lý được bộ gửi ['+code+'].',phase,code},{status:500});}
 }

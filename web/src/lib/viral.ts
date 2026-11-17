@@ -5,15 +5,17 @@ import {after} from 'next/server';
 import {syncBookingSheet} from '../../server/viral/booking-sheet.mjs';
 import {bookingReport} from '../../server/viral/booking-report.mjs';
 import {readBookingBook} from '../../server/viral/google-booking.mjs';
+import {channelMetricsWorkbook} from '../../server/viral/channel-metrics-excel.mjs';
 import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
 import {withViralWriteRetry} from '../../server/viral/approval-retry.mjs';
 import {versionedStateRead,stateReadFailure,retryStateRead} from '../../server/viral/state-read.mjs';
-import {scopeForMethod,scopeConfig,scopeSelect,scopedState,projectState,ReadScopeMiss} from '../../server/viral/state-scopes.mjs';
+import {scopeForMethod,scopeConfig,scopeSelect,scopedState,scopedStateFromTables,projectState,ReadScopeMiss} from '../../server/viral/state-scopes.mjs';
 import {attendanceQueue} from '../../server/viral/attendance-queue.mjs';
 import {commitWithUploads} from '../../server/viral/commit-uploads.mjs';
 import {commitChanges} from '../../server/viral/patch-commit.mjs';
+import {newNotificationEvents} from '../../server/viral/notification-store.mjs';
 import {avatarResolver} from '../../server/viral/avatar-cache.mjs';
 import {loadAttendanceArchive,overlayAttendance} from '../../server/viral/attendance-archive.mjs';
 export function viralService(){
@@ -47,11 +49,30 @@ async function stateQuery(columns:string,retry=true,retryCancelled=true){
   if(response.error)throw stateReadFailure(response.error,stage,response.status);return response.data;
  },{retry,retryCancelled});}catch(error){const failure=stateReadFailure(error,stage);console.error('viral_state_read',{code:failure.code,stage:failure.stage,http_status:failure.httpStatus,elapsed_ms:Date.now()-started,retry_enabled:retry});throw failure;}
 }
+// Scoped reads go through viral_read_tables, which decompresses the stored document once. The older
+// per-table JSON projection decompressed it once per table and was the slowest query in production.
+// Until supabase/viral-read-perf.sql is installed the projection is used.
+let readTablesMissing=false;
+async function readScopedState(scope:string){
+ if(!readTablesMissing){
+  const config=scopeConfig(scope),started=Date.now();
+  try{
+   const result=await retryStateRead(async()=>{
+    const response:any=await viralService().rpc('viral_read_tables',{tables:config.tables,include_files:!!(config as any).files}).abortSignal(AbortSignal.timeout(12000));
+    if(response.error){if(response.error.code==='PGRST202')return null;throw stateReadFailure(response.error,'profile',response.status);}
+    return response.data;
+   },{retry:true,retryCancelled:false});
+   if(result)return scopedStateFromTables(result,scope);
+   readTablesMissing=true;console.warn('viral_read_tables missing: run supabase/viral-read-perf.sql');
+  }catch(error){const failure=stateReadFailure(error,'profile');console.error('viral_state_read',{code:failure.code,stage:'profile',http_status:failure.httpStatus,elapsed_ms:Date.now()-started});throw failure;}
+ }
+ return scopedState(await stateQuery(scopeSelect(scope),true,false),scope);
+}
 const readSharedViralState=versionedStateRead({
  readVersion:async()=>{const row:any=await stateQuery('version');return row.version;},
  readSnapshot:async(scope:string)=>{
   if(scope==='full')return readFreshViralState(true);
-  try{return scopedState(await stateQuery(scopeSelect(scope),true,false),scope);}
+  try{return await readScopedState(scope);}
   catch(error){
    // JSON-path projection can time out on a large compressed state document.
    // Fall back only on database cancellation, never on permissions or missing rows.
@@ -148,11 +169,17 @@ async function invokeViralOnce(method:string,args:any[],initData:string,user:any
   // Google sheet data is request-local. Never persist the copied ledger in Supabase.
   return financeRuntime.run(method,[initData,...args]);
  }
+ if(method==='exportChannelMetrics'){
+  // The report RPC checks the Leader/Director permission; exceljs runs here, outside the business VM.
+  return channelMetricsWorkbook(rt.run('channelMetricsReport',[initData,args[0]||{}]));
+ }
  // Resolve permission BEFORE downloading files.
  let fileIds:string[]=[];
  if(['getV20ExpenseBill','getV20ExpenseBillImage'].includes(method)){
   const info=rt.run('getV20ExpenseBills',[initData,args[0]]);fileIds=method==='getV20ExpenseBillImage'?[String(args[1])]:info.files.slice(0,1);
   if(fileIds.some(id=>!info.files.includes(id)))throw Error('Ảnh không thuộc phiếu này');
+ }else if(method==='channelMetricScreenshot'){
+  fileIds=[String(rt.run('channelMetricScreenshotFile_',[initData,args[0]],true))];
  }else if(method==='getV20PaymentProof'){
   const rows=data.books.main.Expenses,h=rows[0];const expense=rows.slice(1).map((r:any)=>Object.fromEntries(h.map((k:string,i:number)=>[k,r[i]]))).find((r:any)=>String(r.id)===String(args[0]));
   const accountant=data.books.main.Settings.find((r:any)=>r[0]==='accountant_telegram_id')?.[1];
@@ -180,7 +207,7 @@ async function invokeViralOnce(method:string,args:any[],initData:string,user:any
   await commitWithUploads({uploads:rt.uploads,
    upload:(file:any)=>svc.storage.from('viral-files').upload(file.id,file.bytes,{contentType:file.type,upsert:false}),
    remove:async(ids:string[])=>{const {error}=await svc.storage.from('viral-files').remove(ids);if(error)throw error;},
-   commit:()=>commitChanges({rpc:(name:string,params:any)=>svc.rpc(name,params),version,changes,events:makeEvents(rt.data),fullData:()=>rt.data,
+   commit:()=>commitChanges({rpc:(name:string,params:any)=>svc.rpc(name,params),version,changes,events:newNotificationEvents(data,rt.data),fullData:()=>rt.data,
     onFallback:()=>console.warn('viral_commit_patch missing: run supabase/viral-fast-commit.sql')})
   });
   readSharedViralState.invalidate();
