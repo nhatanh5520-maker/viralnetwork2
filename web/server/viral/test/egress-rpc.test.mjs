@@ -220,3 +220,12 @@ test('viral_read_tables: a cancelled read falls back to a full read; a permissio
  await assert.rejects(denied.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:'1004'}),/quyền/);
  assert.ok(!denied.queries.includes('data,version'),'permission errors are not hidden by another read path');
 });
+
+test('channel metrics Excel export runs the permission-checked report and returns an xlsx',async()=>{
+ const h=harness();
+ await h.api.invokeViral('createV20Project',['VN','Viral'],'supabase',{employeeId:'1001'});
+ await h.api.invokeViral('saveProjectChannel',[{project_code:'VN',platform:'TikTok',name:'@viral',vj_id:'1004'}],'supabase',{employeeId:'1001'});
+ const file=await h.api.invokeViral('exportChannelMetrics',[{mode:'week'}],'supabase',{employeeId:'1003'});
+ assert.match(file.filename,/^so-lieu-kenh-week-\d{4}-\d{2}-\d{2}\.xlsx$/);assert.equal(Buffer.from(file.base64,'base64').subarray(0,2).toString(),'PK','xlsx is a zip');
+ await assert.rejects(h.api.invokeViral('exportChannelMetrics',[{mode:'week'}],'supabase',{employeeId:'1004'}),/Leader hoặc Ban giám đốc/);
+});

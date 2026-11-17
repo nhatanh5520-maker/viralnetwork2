@@ -5,7 +5,7 @@ import {ReadScopeMiss} from './state-scopes.mjs';
 const runtimeDir=[process.cwd()+'/server/viral',process.cwd()+'/web/server/viral'].find(p=>fs.existsSync(p+'/business.gs'));
 if(!runtimeDir)throw Error('Không tìm thấy mã nghiệp vụ Viral Network');
 const source=fs.readFileSync(runtimeDir+'/business.gs','utf8');
-const webPolicy=fs.readFileSync(runtimeDir+'/web-policy.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/payment-batches.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/project-management.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/personal-avatars.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/booking.gs','utf8');
+const webPolicy=fs.readFileSync(runtimeDir+'/web-policy.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/payment-batches.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/project-management.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/personal-avatars.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/booking.gs','utf8')+'\n'+fs.readFileSync(runtimeDir+'/channel-metrics.gs','utf8');
 const allowed=new Set(JSON.parse(fs.readFileSync(runtimeDir+'/methods.json','utf8')));
 const webGlue=`
  const originalTelegramAuth = auth_;
@@ -165,6 +165,7 @@ export function createRuntime(input={},user=null,env={}) {
   __user:user,__enqueue:(chatId,text)=>{if(!chatId)return false;data.outbox.push({id:crypto.randomUUID(),chatId:String(chatId),text:String(text),status:'pending',createdAt:new Date().toISOString()});return true;}
  });
  context.__storePersonalImage=image=>{const id=context.__storeProjectImage(image);data.files[id].folder='person-avatars';return id;};
+ context.__storeChannelImage=image=>{const id=context.__storeProjectImage(image);data.files[id].folder='channel-metrics';return id;};
  businessScript.runInContext(context,{timeout:10000});
  // Archived rows live in Sheets. Keep compact work totals in Supabase so ordinary
  // snapshots and mutations remain independent of external history reads.

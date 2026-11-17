@@ -19,7 +19,9 @@ export const READ_SCOPES=Object.freeze({
  projectFile:{tables:unique([...common,'Projects']),files:true},
  avatarFile:{tables:unique([...common,'UserAvatars']),files:true},
  // Bookings: the scheduler sends booking reminders; bookingScreen lists bookings with their videos.
- scheduler:{tables:unique([...common,...production,...attendance,'Notifications','Bookings'])},
+ scheduler:{tables:unique([...common,...production,...attendance,'Notifications','Bookings','ProjectChannels','ChannelMetrics'])},
+ // Số liệu kênh: projects come from Projects + ProductionItems (legacy project labels).
+ channels:{tables:unique([...common,'Projects','ProductionItems','ProjectChannels','ChannelMetrics'])},
  bookings:{tables:unique([...common,...production,'Bookings'])},
  deliveryFiles:{tables:unique([]),files:true},
 });
@@ -27,7 +29,7 @@ const methods=Object.freeze({
  fieldAttendanceOptions:'attendanceOptions',snapshotAttendance:'attendance',attendanceStatus:'attendance',managerAttendanceDay:'attendance',fieldReviewData:'attendance',fieldAttendanceReport:'attendance',fieldConfig:'attendance',
  productionPage:'production',productionScreen:'production',staffProductionWorkload:'production',
  snapshotHome:'home',snapshotCore:'core',snapshotManager:'manager',reviewQueue:'review',
- accountingExpenses:'expenses',bookingScreen:'bookings',avatarBatch:'avatars',personnelDirectory:'personnel',bookingReport:'personnel',
+ accountingExpenses:'expenses',channelMetricsScreen:'channels',channelMetricsReport:'channels',exportChannelMetrics:'channels',bookingScreen:'bookings',avatarBatch:'avatars',personnelDirectory:'personnel',bookingReport:'personnel',
 });
 export function scopeForMethod(method){return Object.hasOwn(methods,method)?methods[method]:null;}
 export class ReadScopeMiss extends Error {
