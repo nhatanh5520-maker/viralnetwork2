@@ -1,6 +1,6 @@
 import {NextResponse} from 'next/server';
 import crypto from 'node:crypto';
-import {viralService,loadViral,invalidateViralState} from '@/lib/viral';
+import {viralService,loadViral,bookingSheetRows,syncBookingsToSheet,invalidateViralState} from '@/lib/viral';
 import {createRuntime} from '../../../../../server/viral/runtime.mjs';
 import {telegramFailure} from '../../../../../server/viral/telegram-errors.mjs';
 import {drainNotifications} from '../../../../../server/viral/notification-worker.mjs';
@@ -37,6 +37,8 @@ export async function GET(req:Request){
    }
   }
   if(changed&&committed)invalidateViralState();
+  // Retry path for the booking Sheet copy: a no-op when this instance already wrote the same data.
+  try{phase='booking_sheet';await syncBookingsToSheet(bookingSheetRows(rt));}catch(e){console.error('booking_sheet_sync',(e as Error).message);}
   // Safety net: saves only hand over the notifications they create, so make sure recent pending rows are
   // queued even when nothing was committed. Rows already in viral_outbox are left untouched (no resend).
   if(!(changed&&committed)){
