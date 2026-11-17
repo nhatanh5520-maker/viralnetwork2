@@ -3,6 +3,7 @@ import {createClient as createSupabaseClient} from '@supabase/supabase-js';
 import {createClient} from '@/lib/supabase/server';
 import {bookingReport} from '../../server/viral/booking-report.mjs';
 import {readBookingBook} from '../../server/viral/google-booking.mjs';
+import {channelMetricsWorkbook} from '../../server/viral/channel-metrics-excel.mjs';
 import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
 import {readFinanceBook} from '../../server/viral/google-finance.mjs';
 import {createRuntime} from '../../server/viral/runtime.mjs';
@@ -145,11 +146,17 @@ async function invokeViralOnce(method:string,args:any[],initData:string,user:any
   // Google sheet data is request-local. Never persist the copied ledger in Supabase.
   return financeRuntime.run(method,[initData,...args]);
  }
+ if(method==='exportChannelMetrics'){
+  // The report RPC checks the Leader/Director permission; exceljs runs here, outside the business VM.
+  return channelMetricsWorkbook(rt.run('channelMetricsReport',[initData,args[0]||{}]));
+ }
  // Resolve permission BEFORE downloading files.
  let fileIds:string[]=[];
  if(['getV20ExpenseBill','getV20ExpenseBillImage'].includes(method)){
   const info=rt.run('getV20ExpenseBills',[initData,args[0]]);fileIds=method==='getV20ExpenseBillImage'?[String(args[1])]:info.files.slice(0,1);
   if(fileIds.some(id=>!info.files.includes(id)))throw Error('Ảnh không thuộc phiếu này');
+ }else if(method==='channelMetricScreenshot'){
+  fileIds=[String(rt.run('channelMetricScreenshotFile_',[initData,args[0]],true))];
  }else if(method==='getV20PaymentProof'){
   const rows=data.books.main.Expenses,h=rows[0];const expense=rows.slice(1).map((r:any)=>Object.fromEntries(h.map((k:string,i:number)=>[k,r[i]]))).find((r:any)=>String(r.id)===String(args[0]));
   const accountant=data.books.main.Settings.find((r:any)=>r[0]==='accountant_telegram_id')?.[1];

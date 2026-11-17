@@ -99,3 +99,9 @@ test('other people checking in does not reload Home or Attendance, but does relo
  assert.equal(t.relevant('home').size,0);assert.equal(t.relevant('attendance').size,0);assert.equal(t.relevant('fieldReview').size,1);assert.equal(t.relevant('performance').size,1);
  t.accept({versions:{schedule:6}});assert.equal(t.relevant('attendance').size,1);
 });
+test('channel metrics changes refresh the Số liệu kênh screen only; its saves announce the metrics scope',()=>{
+ const t=new ChangeTracker();t.accept({versions:{metrics:3}});
+ assert.equal(t.relevant('channelMetrics').size,1);assert.equal(t.relevant('home').size,0);assert.equal(t.relevant('production').size,0);
+ const w={};new Function('globalThis',fs.readFileSync('public/viral/change-tracker.js','utf8').replace('typeof globalThis===\'object\'?globalThis:this','globalThis'))(w);
+ for(const m of ['saveProjectChannel','submitChannelMetrics'])assert.deepEqual([...w.ViralMutationScopes(m)],['metrics']);
+});

@@ -106,5 +106,11 @@
   "createBooking",
   "reviewBookingScript",
   "submitBookingMetrics",
-  "acceptBooking"
+  "acceptBooking",
+  "channelMetricsScreen",
+  "channelMetricsReport",
+  "saveProjectChannel",
+  "submitChannelMetrics",
+  "channelMetricScreenshot",
+  "exportChannelMetrics"
 ]

@@ -97,6 +97,7 @@ create or replace function public.viral_sheet_scopes(sheet text) returns text[] 
   when sheet like 'Leave%' then array['leave']
   when sheet in ('Schedule','Overtime') then array['schedule','attendance']
   when sheet='Settings' then array['settings']
+  when sheet like 'Channel%' or sheet='ProjectChannels' then array['metrics']
   else '{}'::text[] end
 $$;
 
