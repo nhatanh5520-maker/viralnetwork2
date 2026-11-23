@@ -11,7 +11,7 @@
   complete(batch){for(const [scope,revision] of batch)if(this.pending.get(scope)===revision)this.pending.delete(scope);}
  }
  const mutations={
- production:'createProductionItem assignProduction deleteProductionIdea restoreProductionIdea updateProductionIdea saveProductionAsset handoffProductionAssets advanceProduction completeProductionFinal setEditorProgress startVJScript decideProductionApproval decideV20Final decideV20VjFinal submitAppProductionApproval setProductionPublished updateProductionThumbnail',
+ production:'createProductionItem assignProduction assignProductionCrew deleteProductionIdea restoreProductionIdea updateProductionIdea saveProductionAsset handoffProductionAssets advanceProduction completeProductionFinal setEditorProgress startVJScript decideProductionApproval decideV20Final decideV20VjFinal submitAppProductionApproval setProductionPublished updateProductionThumbnail',
  projects:'createV20Project updateWebProject saveProjectAvatar syncWebProjectDirectory',
  work:'createTask submitTask reviewTask',attendance:'attendance fieldAttendance reviewFieldAttendance supplementFieldAttendance saveFieldApprovers',
  people:'savePersonnel addEmployee restorePersonnel saveMyAvatar setHrApprover setV20Accountant',
