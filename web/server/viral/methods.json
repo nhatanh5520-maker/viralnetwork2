@@ -112,5 +112,7 @@
   "saveProjectChannel",
   "submitChannelMetrics",
   "channelMetricScreenshot",
-  "exportChannelMetrics"
+  "exportChannelMetrics",
+  "editSchedule",
+  "editScheduleToday"
 ]

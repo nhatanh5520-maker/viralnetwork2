@@ -29,7 +29,7 @@ const methods=Object.freeze({
  fieldAttendanceOptions:'attendanceOptions',snapshotAttendance:'attendance',attendanceStatus:'attendance',managerAttendanceDay:'attendance',fieldReviewData:'attendance',fieldAttendanceReport:'attendance',fieldConfig:'attendance',
  productionPage:'production',productionScreen:'production',staffProductionWorkload:'production',
  snapshotHome:'home',snapshotCore:'core',snapshotManager:'manager',reviewQueue:'review',
- accountingExpenses:'expenses',channelMetricsScreen:'channels',channelMetricsReport:'channels',exportChannelMetrics:'channels',bookingScreen:'bookings',avatarBatch:'avatars',personnelDirectory:'personnel',bookingReport:'personnel',
+ accountingExpenses:'expenses',channelMetricsScreen:'channels',channelMetricsReport:'channels',exportChannelMetrics:'channels',bookingScreen:'bookings',avatarBatch:'avatars',personnelDirectory:'personnel',bookingReport:'personnel',editSchedule:'personnel',editScheduleToday:'personnel',
 });
 export function scopeForMethod(method){return Object.hasOwn(methods,method)?methods[method]:null;}
 export class ReadScopeMiss extends Error {

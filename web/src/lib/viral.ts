@@ -4,6 +4,7 @@ import {createClient} from '@/lib/supabase/server';
 import {after} from 'next/server';
 import {syncBookingSheet} from '../../server/viral/booking-sheet.mjs';
 import {bookingReport} from '../../server/viral/booking-report.mjs';
+import {readEditSchedule,editScheduleScreen,editScheduleToday} from '../../server/viral/edit-schedule.mjs';
 import {readBookingBook} from '../../server/viral/google-booking.mjs';
 import {channelMetricsWorkbook} from '../../server/viral/channel-metrics-excel.mjs';
 import {ledgerReport} from '../../server/viral/finance-ledger.mjs';
@@ -153,6 +154,12 @@ async function invokeViralOnce(method:string,args:any[],initData:string,user:any
   vm.runInContext(`const previousHRPermission=hrRequireManager_;hrRequireManager_=function(u){if(String(u.id)===String(setting_('hr_telegram_id')||''))return;return previousHRPermission(u);};const previousHRValidation=hrValidation_;hrValidation_=function(data,before,all,u){if(!isDirector_(u)&&String(u.id)===String(setting_('hr_telegram_id')||'')&&before&&role_(before.role)!=='employee')throw Error('HR chỉ sửa hồ sơ nhân viên; hồ sơ quản lý cần Ban giám đốc.');return previousHRValidation(data,before,all,u);};`,rt.context,{timeout:5000});
  }
  const actor=vm.runInContext('auth_(__authInput)',rt.context,{timeout:5000});
+ if(method==='editSchedule'||method==='editScheduleToday'){
+  // Lịch dựng is read from Google Sheets only; any signed-in member may view it. Nothing is written.
+  const options=args[0]&&typeof args[0]==='object'?args[0]:{};
+  const book=await readEditSchedule({refresh:options.refresh===true});
+  return method==='editSchedule'?editScheduleScreen(book,{gid:typeof options.gid==='number'||typeof options.gid==='string'?options.gid:null,user:actor}):editScheduleToday(book,{user:actor});
+ }
  if(method==='bookingReport'){
   if(actor.role!=='director')throw Error('Chỉ Ban giám đốc được xem đơn hàng booking.');
   const filters=args[0]||{};

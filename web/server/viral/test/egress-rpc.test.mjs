@@ -19,9 +19,9 @@ function fixture(){
  return data;
 }
 // readTables: emulate supabase/viral-read-perf.sql being installed; otherwise viral_read_tables is missing (PGRST202).
-function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null,outboxFault=null,uncertainCommit=false,readTables=false}={}){
+function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBook=null,outboxFault=null,uncertainCommit=false,readTables=false,editBook=null}={}){
  // log mirrors viral_state_log: writes made outside the commit functions are unknown ('*').
- let state=fixture(),version=1,interfere=null,log=[];const queries=[],commits=[],bookingReads=[],outboxReads=[],sheetSyncs=[];
+ let state=fixture(),version=1,interfere=null,log=[];const queries=[],commits=[],bookingReads=[],editReads=[],outboxReads=[],sheetSyncs=[];
  class Query{
   constructor(table){this.table=table;this.columns='';}
   select(columns){this.columns=columns;return this;}eq(){return this;}in(){return this;}abortSignal(){return this;}
@@ -62,6 +62,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
  const exports={},sandbox={exports,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://test.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'test'}},Buffer,AbortSignal,setTimeout,console:{warn(){},error(){}},require:id=>{
   if(id==='server-only')return {};
   if(id.endsWith('/booking-sheet.mjs'))return {syncBookingSheet:async rows=>{sheetSyncs.push(structuredClone(rows));return {written:1};}};
+  if(id.endsWith('/edit-schedule.mjs')){const real=actualRequire(id);return {...real,readEditSchedule:async options=>{editReads.push(options);if(!editBook)throw Error('Unexpected Google read');return structuredClone(editBook);}};}
   if(id.endsWith('/google-booking.mjs'))return {readBookingBook:async options=>{bookingReads.push(options);if(!bookingBook)throw Error('Unexpected Google read');return structuredClone(bookingBook);}};
   if(id==='@supabase/supabase-js')return {createClient:()=>svc};
   if(id==='@/lib/supabase/server')return {createClient:async()=>({auth:{getUser:async()=>({data:{user:null}})}})};
@@ -77,7 +78,7 @@ function harness({dependencyMiss=false,sideEffect=false,readFault=null,bookingBo
   return actualRequire(id);
  }};
  vm.runInNewContext(compiled,sandbox,{filename:sourceURL.pathname,timeout:10000});
- return {api:exports,queries,commits,bookingReads,outboxReads,sheetSyncs,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;log.push({version,keys:['*']});},duringCommit:operation=>interfere=operation};
+ return {api:exports,queries,commits,bookingReads,editReads,outboxReads,sheetSyncs,getState:()=>structuredClone(state),getVersion:()=>version,externalWrite:operation=>{state=operation(state);version++;log.push({version,keys:['*']});},duringCommit:operation=>interfere=operation};
 }
 test('actual RPC reuses unchanged scoped data, reauthenticates each user and sees remote writes',async()=>{
  const h=harness(),run=id=>h.api.invokeViral('attendanceStatus',[],'supabase',{employeeId:id});
@@ -240,4 +241,21 @@ test('channel metrics Excel export runs the permission-checked report and return
  const file=await h.api.invokeViral('exportChannelMetrics',[{mode:'week'}],'supabase',{employeeId:'1003'});
  assert.match(file.filename,/^so-lieu-kenh-week-\d{4}-\d{2}-\d{2}\.xlsx$/);assert.equal(Buffer.from(file.base64,'base64').subarray(0,2).toString(),'PK','xlsx is a zip');
  await assert.rejects(h.api.invokeViral('exportChannelMetrics',[{mode:'week'}],'supabase',{employeeId:'1004'}),/Leader hoặc Ban giám đốc/);
+});
+
+test('Lịch dựng: any active member reads the Sheet schedule; nothing is committed; inactive people are refused first',async()=>{
+ const editBook={sheetUrl:'https://docs.google.com/spreadsheets/d/x/edit',readAt:'2026-11-23T01:00:00Z',skipped:[],weeks:[{gid:7,title:'TUẦN 4',start:'2026-11-23',end:'2026-11-29',people:['Test 1002'],
+  days:['2026-11-23','2026-11-24','2026-11-25','2026-11-26','2026-11-27','2026-11-28','2026-11-29'].map((date,i)=>({date,label:date.slice(8)+'/11',weekday:'Thứ '+(i+2)})),
+  channels:[{name:'ĐÀ NẴNG DAILY',days:[[{title:'Vlog chợ',people:['Test 1002']}],[],[],[],[],[],[]]},{name:'VIRAL ĐÀ NẴNG',days:[[],[],[],[],[],[],[]]}]}]};
+ const h=harness({editBook});
+ await assert.rejects(h.api.invokeViral('editSchedule',[{}],'supabase',{employeeId:'not-active'}));
+ assert.equal(h.editReads.length,0,'authorization happens before any Google read');
+ const screen=await h.api.invokeViral('editSchedule',[{gid:7,refresh:true}],'supabase',{employeeId:'1004'});
+ assert.equal(screen.week.gid,7);assert.equal(screen.week.channels.length,2);assert.equal(screen.me,'Test 1004');assert.equal(h.editReads[0].refresh,true);
+ const editor=await h.api.invokeViral('editScheduleToday',[],'supabase',{employeeId:'1002'});
+ assert.equal(editor.manager,false);assert.deepEqual(editor.emptyChannels,[]);
+ if(editor.found)assert.ok(editor.mine.every(t=>t.people.includes('Test 1002')));
+ const leader=await h.api.invokeViral('editScheduleToday',[{}],'supabase',{employeeId:'1001'});assert.equal(leader.manager,true);
+ assert.equal(h.commits.length,0,'reading the schedule never writes app data');
+ assert.ok(!h.queries.includes('data,version'),'served from the small personnel read scope');
 });
