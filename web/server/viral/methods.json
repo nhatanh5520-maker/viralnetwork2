@@ -114,5 +114,6 @@
   "channelMetricScreenshot",
   "exportChannelMetrics",
   "editSchedule",
-  "editScheduleToday"
+  "editScheduleToday",
+  "assignProductionCrew"
 ]
