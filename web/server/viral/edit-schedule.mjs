@@ -9,6 +9,7 @@
 // A channel cell is merged over its rows and reads "NAME\n- PT: owner\n- Lịch đăng bài: …".
 // Column positions come from the merges and the header text, never from fixed letters.
 import {JWT} from 'google-auth-library';
+import {googleAuthError} from './google-auth-reason.mjs';
 
 export const EDIT_SCHEDULE_SHEET_ID='1caT7N_ZIeSvnYW_i7I3aze-5C2YltF-mTHiCxspi7Os';
 const WEEKDAYS=['Chủ nhật','Thứ 2','Thứ 3','Thứ 4','Thứ 5','Thứ 6','Thứ 7'];
@@ -254,7 +255,7 @@ export function createEditScheduleReader({env=process.env,fetcher=fetch,tokenPro
    if(!tokenProvider&&(!email||!key))throw Error('Chưa cấu hình tài khoản Google đọc Sheet (GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY).');
    let token;
    try{token=tokenProvider?await tokenProvider():(await new JWT({email,key,scopes:['https://www.googleapis.com/auth/spreadsheets.readonly']}).getAccessToken()).token;}
-   catch{throw Error('Không xác thực được Google Sheets. Kiểm tra cấu hình tài khoản Google trên Vercel.');}
+   catch(error){throw googleAuthError(error,'edit_schedule');}
    const base='https://sheets.googleapis.com/v4/spreadsheets/'+sheetId;
    const get=async params=>{
     let response;try{response=await fetcher(base+'?'+params,{headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(15000)});}
