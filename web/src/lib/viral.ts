@@ -155,10 +155,10 @@ async function invokeViralOnce(method:string,args:any[],initData:string,user:any
  }
  const actor=vm.runInContext('auth_(__authInput)',rt.context,{timeout:5000});
  if(method==='editSchedule'||method==='editScheduleToday'){
-  // Lịch dựng is read from Google Sheets only; any signed-in member may view it. Nothing is written.
+  // Lịch quay và lịch dựng is read from Google Sheets only; any signed-in member may view it. Nothing is written.
   const options=args[0]&&typeof args[0]==='object'?args[0]:{};
   const book=await readEditSchedule({refresh:options.refresh===true});
-  return method==='editSchedule'?editScheduleScreen(book,{gid:typeof options.gid==='number'||typeof options.gid==='string'?options.gid:null,user:actor}):editScheduleToday(book,{user:actor});
+  return method==='editSchedule'?editScheduleScreen(book,{kind:options.kind==='shoot'?'shoot':'edit',week:typeof options.week==='string'?options.week.slice(0,80):null,user:actor}):editScheduleToday(book,{user:actor});
  }
  if(method==='bookingReport'){
   if(actor.role!=='director')throw Error('Chỉ Ban giám đốc được xem đơn hàng booking.');
