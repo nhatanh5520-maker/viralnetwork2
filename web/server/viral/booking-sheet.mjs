@@ -7,6 +7,7 @@
 //    stay as people typed them. Missing columns are added to the right of the header.
 //  * Only cells whose value differs are sent, so re-running is cheap and idempotent.
 import {JWT} from 'google-auth-library';
+import {googleAuthError} from './google-auth-reason.mjs';
 import {bookingHeader} from './booking-report.mjs';
 import {BOOKING_SHEET_ID,BOOKING_SHEET_NAME} from './google-booking.mjs';
 
@@ -59,7 +60,7 @@ export async function syncBookingSheet(bookings,{env=process.env,fetcher=fetch,t
  const email=env.GOOGLE_SERVICE_ACCOUNT_EMAIL,key=env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g,'\n');
  if(!tokenProvider&&(!email||!key))throw Error('Chưa cấu hình tài khoản Google (GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY).');
  let token;
- try{token=tokenProvider?await tokenProvider():(await new JWT({email,key,scopes:['https://www.googleapis.com/auth/spreadsheets']}).getAccessToken()).token;}catch{throw Error('Không xác thực được Google Sheets để ghi booking.');}
+ try{token=tokenProvider?await tokenProvider():(await new JWT({email,key,scopes:['https://www.googleapis.com/auth/spreadsheets']}).getAccessToken()).token;}catch(error){throw googleAuthError(error,'booking_sheet_sync');}
  const base='https://sheets.googleapis.com/v4/spreadsheets/'+sheetId;
  const request=async(url,body)=>{
   let response;try{response=await fetcher(url,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,cache:'no-store',signal:AbortSignal.timeout(15000)});}

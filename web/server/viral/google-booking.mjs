@@ -1,4 +1,5 @@
 import {JWT} from 'google-auth-library';
+import {googleAuthError} from './google-auth-reason.mjs';
 export const BOOKING_SHEET_ID='1oCiRiVGnWaGPr9Q15iyIbwY-8sPxMrYZcgs8yTDYEhk';
 export const BOOKING_SHEET_NAME='3. Quản Lý Đơn Hàng Booking';
 export function createBookingReader({env=process.env,fetcher=fetch,tokenProvider,now=Date.now,ttlMs=30000}={}){
@@ -12,7 +13,7 @@ export function createBookingReader({env=process.env,fetcher=fetch,tokenProvider
    const email=env.GOOGLE_SERVICE_ACCOUNT_EMAIL,key=env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g,'\n');
    if(!tokenProvider&&(!email||!key))throw Error('Chưa cấu hình tài khoản Google đọc Sheet trên Vercel. Dùng GOOGLE_SERVICE_ACCOUNT_EMAIL và GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY như phần chấm công/Thu chi.');
    let token;
-   try{token=tokenProvider?await tokenProvider(): (await new JWT({email,key,scopes:['https://www.googleapis.com/auth/spreadsheets.readonly']}).getAccessToken()).token;}catch{throw Error('Không xác thực được Google Sheets. Kiểm tra cấu hình tài khoản Google trên Vercel.');}
+   try{token=tokenProvider?await tokenProvider(): (await new JWT({email,key,scopes:['https://www.googleapis.com/auth/spreadsheets.readonly']}).getAccessToken()).token;}catch(error){throw googleAuthError(error,'booking_report');}
    const base='https://sheets.googleapis.com/v4/spreadsheets/'+sheetId;
    const get=async params=>{
     let response;try{response=await fetcher(base+'?'+params,{headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(15000)});}catch{throw Error('Đọc Sheet booking quá thời gian. Vui lòng thử lại.');}
