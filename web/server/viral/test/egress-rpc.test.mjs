@@ -243,18 +243,21 @@ test('channel metrics Excel export runs the permission-checked report and return
  await assert.rejects(h.api.invokeViral('exportChannelMetrics',[{mode:'week'}],'supabase',{employeeId:'1004'}),/Leader hoặc Ban giám đốc/);
 });
 
-test('Lịch dựng: any active member reads the Sheet schedule; nothing is committed; inactive people are refused first',async()=>{
- const editBook={sheetUrl:'https://docs.google.com/spreadsheets/d/x/edit',readAt:'2026-11-23T01:00:00Z',skipped:[],weeks:[{gid:7,title:'TUẦN 4',start:'2026-11-23',end:'2026-11-29',people:['Test 1002'],
-  days:['2026-11-23','2026-11-24','2026-11-25','2026-11-26','2026-11-27','2026-11-28','2026-11-29'].map((date,i)=>({date,label:date.slice(8)+'/11',weekday:'Thứ '+(i+2)})),
-  channels:[{name:'ĐÀ NẴNG DAILY',days:[[{title:'Vlog chợ',people:['Test 1002']}],[],[],[],[],[],[]]},{name:'VIRAL ĐÀ NẴNG',days:[[],[],[],[],[],[],[]]}]}]};
+test('Lịch quay và lịch dựng: any active member reads the Sheet; nothing is committed; inactive people are refused first',async()=>{
+ const days=['2026-11-30','2026-12-01','2026-12-02','2026-12-03','2026-12-04','2026-12-05','2026-12-06'].map((date,i)=>({date,label:date.slice(8)+'/'+date.slice(5,7),weekday:'Thứ '+(i+2)}));
+ const week=(kind,gid,channels,people)=>({id:gid+':2026-11-30',gid,tab:'THÁNG 12 | '+(kind==='shoot'?'LỊCH QUAY':'TASK DỰNG'),kind,title:'30/11 - 06/12',start:'2026-11-30',end:'2026-12-06',days,people,channels});
+ const editBook={sheetUrl:'https://docs.google.com/spreadsheets/d/x/edit',readAt:'2026-11-28T01:00:00Z',skipped:[],weeks:[
+  week('shoot',0,[{name:'LƯỢN ĐÀ NẴNG',owner:'Diễm Hương',plan:'',days:[[{session:'Sáng',time:'8:00',place:'Chợ Hàn',type:'',people:['Test 1004']}],[],[],[],[],[],[]]}],['Test 1004']),
+  week('edit',7,[{name:'ĐÀ NẴNG DAILY',owner:'Linh Chi',plan:'',days:[[{title:'Vlog chợ',type:'Booking',people:['Test 1002']}],[],[],[],[],[],[]]},{name:'VIRAL ĐÀ NẴNG',owner:'',plan:'',days:[[],[],[],[],[],[],[]]}],['Test 1002'])]};
  const h=harness({editBook});
  await assert.rejects(h.api.invokeViral('editSchedule',[{}],'supabase',{employeeId:'not-active'}));
  assert.equal(h.editReads.length,0,'authorization happens before any Google read');
- const screen=await h.api.invokeViral('editSchedule',[{gid:7,refresh:true}],'supabase',{employeeId:'1004'});
- assert.equal(screen.week.gid,7);assert.equal(screen.week.channels.length,2);assert.equal(screen.me,'Test 1004');assert.equal(h.editReads[0].refresh,true);
+ const shoot=await h.api.invokeViral('editSchedule',[{kind:'shoot',refresh:true}],'supabase',{employeeId:'1004'});
+ assert.equal(shoot.kind,'shoot');assert.equal(shoot.week.id,'0:2026-11-30');assert.equal(shoot.me,'Test 1004');assert.equal(h.editReads[0].refresh,true);
+ const edit=await h.api.invokeViral('editSchedule',[{kind:'edit',week:'7:2026-11-30'}],'supabase',{employeeId:'1004'});
+ assert.equal(edit.week.channels.length,2);
  const editor=await h.api.invokeViral('editScheduleToday',[],'supabase',{employeeId:'1002'});
- assert.equal(editor.manager,false);assert.deepEqual(editor.emptyChannels,[]);
- if(editor.found)assert.ok(editor.mine.every(t=>t.people.includes('Test 1002')));
+ assert.equal(editor.manager,false);assert.ok(['shoot','edit'].every(k=>Array.isArray(editor[k].mine)));
  const leader=await h.api.invokeViral('editScheduleToday',[{}],'supabase',{employeeId:'1001'});assert.equal(leader.manager,true);
  assert.equal(h.commits.length,0,'reading the schedule never writes app data');
  assert.ok(!h.queries.includes('data,version'),'served from the small personnel read scope');

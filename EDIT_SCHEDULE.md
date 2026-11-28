@@ -1,49 +1,63 @@
-# Lịch dựng
+# Lịch quay và lịch dựng
 
-Mục **Tiện ích → Lịch dựng** và thẻ **"Lịch dựng hôm nay"** ở Trang chủ hiển thị Google Sheet **ORDER TASK DỰNG** theo từng ngày, từng kênh và từng task.
+Mục **Tiện ích → Lịch quay và lịch dựng** và thẻ cùng tên ở Trang chủ hiển thị Google Sheet **"Order lịch quay & Dựng"** theo tuần, ngày, kênh. Trang có 2 phần, chuyển qua lại bằng 2 nút ở đầu trang:
 
-**App chỉ đọc Sheet.** Muốn thêm hay sửa task thì vẫn sửa trên Sheet; app không có nút thêm hay sửa và không bao giờ ghi vào Sheet.
+- **🎥 Lịch quay:** đọc các tab `THÁNG <số> | LỊCH QUAY`.
+- **✂ Lịch dựng:** đọc các tab `THÁNG <số> | TASK DỰNG`.
 
-## Cài đặt (một lần)
+App **chỉ đọc**: không có nút thêm hay sửa, không bao giờ ghi vào Sheet. Muốn đổi lịch thì sửa trên Sheet.
 
-1. Mở Sheet ORDER TASK DỰNG, bấm **Chia sẻ**, thêm email trong biến `GOOGLE_SERVICE_ACCOUNT_EMAIL` trên Vercel với quyền **Người xem**. Đây là cùng email đã dùng cho Sheet CRM.
-2. Không cần chạy SQL và không cần thêm biến môi trường. Nếu sau này đổi sang Sheet khác, đặt biến `EDIT_SCHEDULE_SHEET_ID` trên Vercel.
+## Cài đặt
+
+1. **Chia sẻ Sheet:** chia sẻ Sheet cho email trong biến `GOOGLE_SERVICE_ACCOUNT_EMAIL` trên Vercel, quyền **Người xem**.
+2. **ID Sheet:** mặc định là `1caT7N_ZIeSvnYW_i7I3aze-5C2YltF-mTHiCxspi7Os`. Muốn đổi sang Sheet khác thì đặt biến `EDIT_SCHEDULE_SHEET_ID` trên Vercel.
+3. Không cần chạy SQL.
 
 ## Khung Sheet app đọc được
 
-- **Mỗi tuần một tab.** App đọc tối đa 60 tab gần nhất và bỏ qua tab ẩn.
-- **Hàng ngày:** có ít nhất 3 ô ngày dạng `23/11` hoặc `23/11/2026`. Mỗi ngày là một khối cột, thường gộp 2 ô. Nếu ô ngày không ghi năm, app chọn năm gần hôm nay nhất; tuần vắt qua Tết dương lịch được tự chuyển sang năm sau.
-- **Hàng tiêu đề** (ngay dưới hàng ngày, hoặc dưới hàng "THỨ 2…"):
-  - `KÊNH/VJ` ở cột đầu.
-  - `TÊN TASK` và `NGƯỜI THỰC HIỆN` trong mỗi khối ngày.
-- **Mỗi dòng bên dưới là một kênh.** Thứ tự và tên kênh có thể đổi tùy ý. Dòng "Tổng" và "Ghi chú" được bỏ qua.
-- **Nhiều task trong một ô:** mỗi dòng (Alt+Enter) là một task.
-  - Nếu ô "Người thực hiện" có cùng số dòng thì ghép từng cặp; nếu không thì mọi task trong ô dùng chung danh sách người.
+**Tab:**
+- Mỗi tháng một tab. Tên tab có `LỊCH QUAY` hoặc `TASK DỰNG`; số dấu cách quanh dấu `|` không quan trọng.
+- App đọc 24 tab hiển thị gần nhất và bỏ qua tab ẩn.
+
+**Tuần trong một tab:** mỗi tab có nhiều tuần xếp từ trên xuống. Mỗi tuần gồm:
+1. **Dòng tiêu đề tuần** dạng `30/11 - 06/12`, ở một trong 3 cột đầu.
+2. **Dòng ngày** `30/11/2026` …. Mỗi ngày là một ô **gộp** phủ các cột của ngày đó.
+3. Dòng thứ (`THỨ 2` … `CHỦ NHẬT`).
+4. **Dòng tiêu đề cột:** `KÊNH`, (`BUỔI` cho lịch quay), rồi tên các cột của mỗi ngày:
+   - Lịch quay: **Giờ dự kiến · Địa điểm · Loại · Người quay**.
+   - Lịch dựng: **Tên Task · Loại · Người Phụ Trách**.
+5. **Các kênh:** mỗi kênh là một khối dòng, ô kênh gộp theo chiều dọc. Ô kênh ghi tên kênh, `PT: <người phụ trách>` và, nếu có, `Lịch đăng bài: …`.
+
+**Cách đọc ô:**
+- **Vị trí cột:** lấy từ vùng ô gộp (đọc qua Sheets API) và chữ ở dòng tiêu đề cột. Chèn, bớt hay đổi thứ tự cột vẫn đọc đúng, miễn giữ tên cột.
+- **Lịch quay:**
+  - Cột `BUỔI` ghi `Sáng` / `Chiều`. Các dòng bên dưới thuộc cùng buổi cho tới khi gặp buổi mới.
+  - Một suất quay chỉ được tính khi có **giờ, địa điểm hoặc người quay**.
+- **Lịch dựng:**
+  - Một task chỉ được tính khi có **tên task hoặc người phụ trách**.
+  - Nhiều dòng trong ô Tên Task (Alt+Enter) là nhiều task; nếu ô người có cùng số dòng thì ghép từng cặp.
+- **Ô chỉ có "Loại"** (dòng mẫu) bị bỏ qua.
 - **Nhiều người trong một ô:** ngăn bằng dấu phẩy, `;`, `/`, `&`, `+` hoặc chữ "và".
-- **Màu và link:** màu nền ô task hiện thành vạch màu bên trái task; link trong ô hiện thành nút "Mở link".
-- **Ô gộp:** kênh gộp nhiều dòng được tính là một kênh; task gộp nhiều dòng chỉ hiện một lần.
+- **Màu và link:** màu nền ô địa điểm (lịch quay) hoặc ô tên task (lịch dựng) hiện thành vạch màu bên trái mục đó. Link trong ô hiện thành nút "Mở link".
 
 ## Ai thấy gì
 
-- **Mọi nhân viên đang hoạt động** xem được toàn bộ lịch, có nút **★ Task của tôi** và bộ lọc theo người thực hiện.
-- **Thẻ trang chủ** hiện task hôm nay có tên mình. Leader và Ban giám đốc thấy thêm tổng số task hôm nay và các kênh chưa có task.
-- **"Task của tôi"** nhận ra mình qua tên ghi trên Sheet. Cách so tên:
-  - Không phân biệt dấu và hoa thường: `MINH THI` = `Minh Thi`.
-  - Tên từ hai chữ trở lên được khớp với phần cuối họ tên trên app: `Minh Thi` khớp `Nguyễn Minh Thi`.
-  - Tên một chữ phải trùng hẳn với tên trên app.
+- **Mọi nhân viên đang hoạt động** xem được cả hai phần. Có nút **★ Lịch quay của tôi / Task của tôi**, và bộ lọc theo người quay hoặc người phụ trách.
+- **Thẻ trang chủ:** hiện suất quay và task dựng hôm nay có tên mình. Leader và Ban giám đốc thấy thêm tổng số suất quay, tổng số task dựng hôm nay và các kênh chưa có task dựng.
+- **Ghép tên:** không phân biệt dấu và hoa thường. Tên từ hai chữ trở lên khớp được với phần cuối họ tên trên app ("Minh Thi" khớp "Nguyễn Minh Thi"); tên một chữ phải trùng hẳn.
 
 ## Kỹ thuật
 
 - **Đọc và phân tích:** `web/server/viral/edit-schedule.mjs`.
   - Đọc bằng Google Sheets API với quyền `spreadsheets.readonly`, chỉ gửi yêu cầu GET.
-  - Một lần đọc lấy tất cả các tab. Dữ liệu được giữ trong bộ nhớ server 60 giây.
-- **RPC:** `editSchedule` và `editScheduleToday`, xử lý trong `web/src/lib/viral.ts`.
-  - Kiểm tra đăng nhập trước khi đọc Sheet.
-  - Phạm vi đọc dữ liệu app là `personnel`, chỉ gồm Employees và Settings.
-  - Không ghi gì vào dữ liệu app.
+  - Một lần đọc lấy mọi tab cùng vùng ô gộp (`merges`). Dữ liệu được giữ trong bộ nhớ server 60 giây.
+- **RPC:**
+  - `editSchedule({kind:'shoot'|'edit', week, refresh})` cho trang.
+  - `editScheduleToday()` cho thẻ trang chủ.
+  - Kiểm tra đăng nhập trước khi đọc Sheet, dùng phạm vi đọc `personnel`, không ghi dữ liệu app.
 - **Giao diện:** `web/public/viral/edit-schedule.js`.
-  - Màn hình rộng hiện bảng giống Sheet.
+  - Màn hình rộng hiện bảng tuần.
   - Dưới 760px hiện từng ngày một.
 - **Test:**
-  - `web/server/viral/test/edit-schedule.test.mjs`.
-  - Thêm một ca trong `egress-rpc.test.mjs`.
+  - `web/server/viral/test/edit-schedule.test.mjs`, dựng đúng khung hai tab thật.
+  - Một ca trong `egress-rpc.test.mjs`.
